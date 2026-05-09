@@ -1,0 +1,10 @@
+.vim
+.vscode
+obj/*
+.clangd
+.claude/
+.opencode/
+.windsurf/
+.cursor/
+CLAUDE.md
+AGENTS.md
