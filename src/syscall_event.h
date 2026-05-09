@@ -11,7 +11,7 @@ struct OpenAtData {
     int dirfd;
     std::string pathname;
     int flags;
-    mode_t mode;
+    int mode;
 };
 
 struct WriteData {
