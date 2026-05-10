@@ -5,10 +5,14 @@ OBJDIR = obj
 main: src/main.cc src/engine.cc src/parse_syscall.cc | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -o $(OBJDIR)/main $^
 
+test: tests/parse_syscall_arg_test.cc src/parse_syscall.cc | $(OBJDIR)
+	$(CXX) $(CXXFLAGS) -o $(OBJDIR)/parse_syscall_arg_test $^
+	$(OBJDIR)/parse_syscall_arg_test
+
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
 
 clean:
 	rm -f $(OBJDIR)/*
 
-.PHONY: main clean
+.PHONY: main test clean
