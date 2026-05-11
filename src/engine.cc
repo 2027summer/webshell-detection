@@ -157,6 +157,13 @@ namespace engine {
                 }
                 break;
             }
+            case SYS_openat: {
+                auto args = parse_openat(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
             default:
                 break;
         }
