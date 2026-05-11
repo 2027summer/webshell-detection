@@ -6,14 +6,29 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "engine.h"
+#include "rule.h"
+#include "rules.h"
 
 using namespace engine;
+
+void register_rules(Engine& engine) {
+    engine.add_rule((DetectionRule) {
+        .name = "execve_cat_flag",
+        .timeout_ns = 1000000000UL,
+        .transitions = {
+            detection_rules::is_execve_bin_sh_cat_flag,
+            detection_rules::is_openat_flag
+        },
+    });
+}
 
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s <command> [args...]\n", argv[0]);
         return 1;
     }
+    Engine engine;
+    register_rules(engine);
 
     pid_t child = fork();
     if (child == 0) {
@@ -38,8 +53,6 @@ int main(int argc, char **argv) {
     ) < 0) {
         return 1;
     }
-
-    Engine engine;
 
     engine.add_tracked_pid(child);
     ptrace(PTRACE_SYSCALL, child, nullptr, 0);
