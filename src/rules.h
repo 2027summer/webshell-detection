@@ -5,13 +5,25 @@
 #include <variant>
 #include <sys/syscall.h>
 #include <sys/socket.h>
+#include "engine.h"
 #include "helpers.h"
 #include "detection_state.h"
 #include "syscall_event.h"
+#include "rule.h"
+
+#if __has_include("codegen_rules.h")
+#include "codegen_rules.h"
+#else
+namespace detection_rules {
+inline void register_codegen_rules(engine::Engine&) {}
+}
+#endif
 
 namespace detection_rules {
 
 using namespace engine;
+
+inline void register_codegen_rules(engine::Engine& engine);
 
 static const char* execve_deny[] = {
     "/usr/bin/ls"
@@ -181,5 +193,35 @@ inline bool is_exeve_deny(const DetectionState& state, const SyscallEvent& event
     }
 
     return false;
+}
+
+inline void register_rules(engine::Engine& engine) {
+    // engine.add_rule((DetectionRule) {
+    //     .name = "execve_cat_flag",
+    //     .timeout_ns = 1000000000UL,
+    //     .transitions = {
+    //         detection_rules::is_execve_bin_sh_cat_flag,
+    //         detection_rules::is_openat_flag
+    //     },
+    // });
+
+    // engine.add_rule((DetectionRule) {
+    //     .name = "execve_cat_openat_deny",
+    //     .timeout_ns = 1000000000UL,
+    //     .transitions = {
+    //         detection_rules::is_execve_cat,
+    //         detection_rules::is_openat_deny
+    //     },
+    // });
+
+    // engine.add_rule((DetectionRule) {
+    //     .name = "execve_deny_path",
+    //     .timeout_ns = 1000000000UL,
+    //     .transitions = {
+    //         detection_rules::is_exeve_deny,
+    //     },
+    // });
+
+    register_codegen_rules(engine);
 }
 }

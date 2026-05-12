@@ -6,38 +6,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "engine.h"
-#include "rule.h"
 #include "rules.h"
 
 using namespace engine;
-
-void register_rules(Engine& engine) {
-    engine.add_rule((DetectionRule) {
-        .name = "execve_cat_flag",
-        .timeout_ns = 1000000000UL,
-        .transitions = {
-            detection_rules::is_execve_bin_sh_cat_flag,
-            detection_rules::is_openat_flag
-        },
-    });
-
-    engine.add_rule((DetectionRule) {
-        .name = "execve_cat_openat_deny",
-        .timeout_ns = 1000000000UL,
-        .transitions = {
-            detection_rules::is_execve_cat,
-            detection_rules::is_openat_deny
-        },
-    });
-
-    engine.add_rule((DetectionRule) {
-        .name = "execve_deny_path",
-        .timeout_ns = 1000000000UL,
-        .transitions = {
-            detection_rules::is_exeve_deny,
-        },
-    });
-}
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -45,7 +16,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     Engine engine;
-    register_rules(engine);
+    detection_rules::register_rules(engine);
 
     pid_t child = fork();
     if (child == 0) {
