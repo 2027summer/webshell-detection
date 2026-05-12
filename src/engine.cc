@@ -4,7 +4,6 @@
 #include "engine.h"
 #include "detection_state.h"
 #include "parse_syscall.h"
-#include "rule.h"
 #include "syscall_event.h"
 
 namespace engine {
@@ -22,22 +21,6 @@ namespace engine {
 
     size_t Engine::tracked() {
         return tracked_pids.size();
-    }
-
-    void Engine::add_rule(DetectionRule rule) {
-        size_t index = rules.size();
-        this->rules.push_back(std::move(rule));
-        DetectionState initial_state = {
-            .id = this->detection_state_count,
-            .pid = 0,
-            .rule_index = index,
-            .current_state_index = 0,
-            .start_time_ns = 0,
-            .is_done = false
-        };
-
-        this->detection_state_count++;
-        this->initial_states.push_back(initial_state);
     }
 
     void Engine::process_transition(const SyscallEvent& event) {

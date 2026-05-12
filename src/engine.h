@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <optional>
 #include <unordered_map>
 #include <sys/ptrace.h>
@@ -21,8 +20,6 @@ namespace engine {
 
             bool is_tracked(pid_t pid);
             size_t tracked();
-
-            void add_rule(DetectionRule rule);
         private:
             std::unordered_map<pid_t, std::optional<SyscallEvent>> tracked_pids;
             std::vector<DetectionRule> rules;    
