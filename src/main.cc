@@ -20,6 +20,23 @@ void register_rules(Engine& engine) {
             detection_rules::is_openat_flag
         },
     });
+
+    engine.add_rule((DetectionRule) {
+        .name = "execve_cat_openat_deny",
+        .timeout_ns = 1000000000UL,
+        .transitions = {
+            detection_rules::is_execve_cat,
+            detection_rules::is_openat_deny
+        },
+    });
+
+    engine.add_rule((DetectionRule) {
+        .name = "execve_deny_path",
+        .timeout_ns = 1000000000UL,
+        .transitions = {
+            detection_rules::is_exeve_deny,
+        },
+    });
 }
 
 int main(int argc, char **argv) {
