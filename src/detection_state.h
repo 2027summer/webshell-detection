@@ -5,7 +5,7 @@
 namespace engine {
 
 struct DetectionState {
-    int id;
+    size_t id;
     pid_t pid;
     size_t rule_index;
     size_t current_state_index;
