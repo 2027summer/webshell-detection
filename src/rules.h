@@ -195,6 +195,23 @@ inline bool is_exeve_deny(const DetectionState& state, const SyscallEvent& event
     return false;
 }
 
+inline bool is_execve_grep_R(const DetectionState& state, const SyscallEvent& event) {
+    if (event.syscall_index != SYS_execve) {
+        return false;
+    }
+
+    const auto* args = std::get_if<ExecveData>(&event.args);
+    if (!args) return false;
+
+    for (size_t i = 1; i < args->argv.size(); i++) {
+        if (args->argv[i] == "-R") {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 inline void register_rules(engine::Engine& engine) {
     // engine.add_rule((DetectionRule) {
     //     .name = "execve_cat_flag",
@@ -222,6 +239,13 @@ inline void register_rules(engine::Engine& engine) {
     //     },
     // });
 
+    engine.add_rule((DetectionRule) {
+        .name = "execve_grep_R",
+        .timeout_ns = 1000000000UL,
+        .transitions = {
+            detection_rules::is_execve_grep_R,
+        },
+    });
     register_codegen_rules(engine);
 }
 }
