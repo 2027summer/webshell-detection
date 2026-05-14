@@ -9,4 +9,5 @@ obj/*
 CLAUDE.md
 AGENTS.md
 src/codegen_rules.h
+__pycache__
 rules.yaml
