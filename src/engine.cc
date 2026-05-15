@@ -96,7 +96,7 @@ namespace engine {
             size_t rule_index = initial_state.rule_index;
             bool can = this->rules[rule_index].transitions[0](initial_state, event);
             if (can) {
-                fprintf(stderr, "[DEBUG] run id: %lu\n", this->detection_state_count);
+                // fprintf(stderr, "[DEBUG] run id: %lu\n", this->detection_state_count);
                 size_t final_state_index = this->rules[rule_index].transitions.size();
                 if (final_state_index == 1) {
                     fprintf(
@@ -159,6 +159,34 @@ namespace engine {
             }
             case SYS_openat: {
                 auto args = parse_openat(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_renameat2: {
+                auto args = parse_renameat2(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_linkat: {
+                auto args = parse_linkat(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_symlinkat: {
+                auto args = parse_symlinkat(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_unlinkat: {
+                auto args = parse_unlinkat(pid, info);
                 if (args.has_value()) {
                     event.args = *args;
                 }
