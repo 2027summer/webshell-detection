@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
                 case PTRACE_EVENT_CLONE: {
                     unsigned long new_pid = 0;
                     ptrace(PTRACE_GETEVENTMSG, pid, nullptr, &new_pid);
-                    engine.add_tracked_pid(static_cast<pid_t>(new_pid));
+                    engine.add_tracked_pid(static_cast<pid_t>(new_pid), pid);
                     break;
                 }
                 default:

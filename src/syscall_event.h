@@ -115,6 +115,7 @@ struct SyscallEvent {
     pid_t pid;
     SyscallArgs args;
     std::optional<long> retval;
+    bool from_shell;
     unsigned long timestamp_ns;
 };
 }

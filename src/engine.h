@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <sys/ptrace.h>
 #include "detection_state.h"
 #include "rule.h"
@@ -11,7 +12,7 @@
 namespace engine {
     class Engine {
         public:
-            void add_tracked_pid(pid_t pid);
+            void add_tracked_pid(pid_t pid, pid_t parent_pid = 0);
             void remove_tracked_pid(pid_t pid);
             void handle_syscall_entry(pid_t pid, const __ptrace_syscall_info info);
             void handle_syscall_exit(pid_t pid, const __ptrace_syscall_info info);
@@ -25,6 +26,7 @@ namespace engine {
             void add_rule(DetectionRule rule);
         private:
             std::unordered_map<pid_t, std::optional<SyscallEvent>> tracked_pids;
+            std::unordered_set<pid_t> from_shell_pids;
             std::vector<DetectionRule> rules;    
             std::vector<DetectionState> initial_states;
             std::unordered_map<size_t, DetectionState> active_detection_states;

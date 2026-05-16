@@ -8,12 +8,17 @@
 #include "syscall_event.h"
 
 namespace engine {
-    void Engine::add_tracked_pid(pid_t pid) {
+    void Engine::add_tracked_pid(pid_t pid, pid_t parent_pid) {
         tracked_pids[pid] = std::nullopt;
+
+        if (from_shell_pids.find(parent_pid) != from_shell_pids.end()) {
+            from_shell_pids.insert(pid);
+        }
     }
 
     void Engine::remove_tracked_pid(pid_t pid) {
         tracked_pids.erase(pid);
+        from_shell_pids.erase(pid);
     }
 
     bool Engine::is_tracked(pid_t pid) {
@@ -146,10 +151,13 @@ namespace engine {
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
 
+        bool is_from_shell = from_shell_pids.find(pid) != from_shell_pids.end();
+
         SyscallEvent event {
             .syscall_index = info.entry.nr,
             .pid = pid,
             .retval = std::nullopt,
+            .from_shell = is_from_shell,
             .timestamp_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec)
         };
 
@@ -210,6 +218,16 @@ namespace engine {
 
         long retval = parse_syscall_rval(info);
         tracked_pids[pid]->retval = retval;
+
+        if (tracked_pids[pid]->syscall_index == SYS_execve) {
+            const auto* args = std::get_if<ExecveData>(&tracked_pids[pid]->args);
+            if (args && (args->filename == "/bin/sh" || args->filename == "/bin/bash")) {
+                if (args->argv.size() >= 2 && args->argv[1] == "-c") {
+                from_shell_pids.insert(pid);
+                tracked_pids[pid]->from_shell = true;
+                }
+            }
+        }
 
         process_event(*tracked_pids[pid]);
     }
