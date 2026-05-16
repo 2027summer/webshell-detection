@@ -204,6 +204,20 @@ namespace engine {
                 }
                 break;
             }
+            case SYS_dup2: {
+                auto args = parse_dup2(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_write: {
+                auto args = parse_write(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -223,8 +237,8 @@ namespace engine {
             const auto* args = std::get_if<ExecveData>(&tracked_pids[pid]->args);
             if (args && (args->filename == "/bin/sh" || args->filename == "/bin/bash")) {
                 if (args->argv.size() >= 2 && args->argv[1] == "-c") {
-                from_shell_pids.insert(pid);
-                tracked_pids[pid]->from_shell = true;
+                    from_shell_pids.insert(pid);
+                    tracked_pids[pid]->from_shell = true;
                 }
             }
         }

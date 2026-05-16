@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <fcntl.h>
+#include <optional>
 #include <variant>
 #include <sys/syscall.h>
 #include <sys/socket.h>
@@ -212,6 +213,58 @@ inline bool is_execve_grep_R(const DetectionState& state, const SyscallEvent& ev
     return false;
 }
 
+inline bool is_bin_sh_echo_inject_1(const DetectionState& state, const SyscallEvent& event) {
+    if (event.syscall_index != SYS_dup2) {
+        return false;
+    }
+
+    const auto* args = std::get_if<Dup2Data>(&event.args);
+    if (!args) return false;
+
+    if (static_cast<long>(args->newfd) != 1) {
+        return false;
+    }
+
+    return true;
+}
+
+inline bool is_bin_sh_echo_inject_2(const DetectionState& state, const SyscallEvent& event) {
+    if (event.syscall_index != SYS_write) {
+        return false;
+    }
+
+    if (event.from_shell == false) {
+        return false;
+    }
+
+    const auto* args = std::get_if<WriteData>(&event.args);
+    if (!args) return false;
+
+    if (args->fd != 1) {
+        return false;
+    }
+
+    if (args->data.size() < 4) {
+        return false;
+    }
+
+    if (args->data[0] != 0x7F) {
+        return false;
+    }
+    if (args->data[1] != 0x45) { // E
+        return false;
+    }
+    if (args->data[2] != 0x4C) { // L
+        return false;
+    }
+    if (args->data[3] != 0x46) { // F
+        return false;
+    }
+
+    return true;
+}
+
+
 inline void register_rules(engine::Engine& engine) {
     // engine.add_rule((DetectionRule) {
     //     .name = "execve_cat_flag",
@@ -244,6 +297,14 @@ inline void register_rules(engine::Engine& engine) {
         .timeout_ns = 1000000000UL,
         .transitions = {
             detection_rules::is_execve_grep_R,
+        },
+    });
+    engine.add_rule((DetectionRule) {
+        .name = "is_bin_sh_echo_inject",
+        .timeout_ns = 1000000000UL,
+        .transitions = {
+            detection_rules::is_bin_sh_echo_inject_1,
+            detection_rules::is_bin_sh_echo_inject_2
         },
     });
     register_codegen_rules(engine);
