@@ -66,6 +66,10 @@ namespace engine {
                 continue;
             }
 
+            if (state.pid != event.pid) {
+                continue;
+            }
+
             // fprintf(stderr, "[DEBUG] check id: %lu current_state_index: %lu\n", state.id, current_state_index);
             bool can = this->rules[rule_index].transitions[current_state_index](state, event);
             if (can) {
