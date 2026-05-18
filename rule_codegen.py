@@ -72,13 +72,13 @@ inline void register_codegen_rules(engine::Engine& engine) {{
 
 
 def gen_execve(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_execve) {{
-        return false;
+        return -1;
     }}
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
 """
 
@@ -113,15 +113,15 @@ def gen_execve(function_name: str, t: dict):
 
         if len(allow_conds) > 0 and len(deny_conds) > 0:
             body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         elif len(allow_conds) > 0:
             body += f"    if ({cond_allow}) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         else:
             body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
 
     if "argv" in t and len(t["argv"]) > 0:
@@ -134,7 +134,7 @@ def gen_execve(function_name: str, t: dict):
 
         max_index = max(argv.keys())
         body += f"""    if (args->argv.size() < {max_index + 1}) {{
-        return false;
+        return -1;
     }}
 """
 
@@ -153,7 +153,7 @@ def gen_execve(function_name: str, t: dict):
 
             cond = " || ".join(l)
             body += f"    if (!({cond})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
 
     if "find_name_keywords" in t and len(t["find_name_keywords"]) > 0:
@@ -176,7 +176,7 @@ def gen_execve(function_name: str, t: dict):
         }}
     }}
     if (flag_find_name_keywords == false) {{
-        return false;
+        return -1;
     }}
 """
 
@@ -221,28 +221,28 @@ def gen_execve(function_name: str, t: dict):
         }}
     }}
     if (flag == false) {{
-        return false;
+        return -1;
     }}
 """
 
-    body += "    return true;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_openat(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
-        return false;
+        return -1;
     }}
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 """
 
     if "dirfd" in t:
         body += f"""    if (args->dirfd != {t["dirfd"]}) {{
-        return false;
+        return -1;
     }}
 """
 
@@ -266,7 +266,7 @@ def gen_openat(function_name: str, t: dict):
                 assert(False)
             if "dirfd" not in t:
                 body += """    if (args->dirfd != AT_FDCWD) {
-        return false;
+        return -1;
     }
 """
             body += "    auto absolute_path = get_absolute_path(event.pid, args->pathname);\n"
@@ -285,42 +285,42 @@ def gen_openat(function_name: str, t: dict):
 
         if len(allow_conds) > 0 and len(deny_conds) > 0:
             body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         elif len(allow_conds) > 0:
             body += f"    if ({cond_allow}) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         else:
             body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
     
     if "flags" in t:
         flags = t["flags"] # expected: ["O_RDONLY", "...", ...]
         if "O_RDONLY" in flags:
             body += """    if (!((args->flags & O_RDONLY) == O_RDONLY)) {
-        return false;
+        return -1;
     }
 """
-    body += "    return true;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_unlinkat(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_unlinkat) {{
-        return false;
+        return -1;
     }}
 
     const auto* args = std::get_if<UnlinkAtData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 """
 
     if "dfd" in t:
         body += f"""    if (args->dfd != {t["dfd"]}) {{
-        return false;
+        return -1;
     }}
 """
 
@@ -343,7 +343,7 @@ def gen_unlinkat(function_name: str, t: dict):
                 assert(False)
             if "dfd" not in t:
                 body += """    if (args->dfd != AT_FDCWD) {
-        return false;
+        return -1;
     }
 """
             body += "    auto absolute_path = get_absolute_path(event.pid, args->pathname);\n"
@@ -362,30 +362,30 @@ def gen_unlinkat(function_name: str, t: dict):
 
         if len(allow_conds) > 0 and len(deny_conds) > 0:
             body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         elif len(allow_conds) > 0:
             body += f"    if ({cond_allow}) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         else:
             body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
 
-    body += "    return true;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_renameat2(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_renameat2) {{
-        return false;
+        return -1;
     }}
 
     const auto* args = std::get_if<RenameAt2Data>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 """
 
     if "oldname" in t:
@@ -419,35 +419,35 @@ def gen_renameat2(function_name: str, t: dict):
 
         if len(allow_conds) > 0 and len(deny_conds) > 0:
             body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         elif len(allow_conds) > 0:
             body += f"    if ({cond_allow}) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         else:
             body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
 
-    body += "    return true;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_linkat(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_linkat) {{
-        return false;
+        return -1;
     }}
 
     const auto* args = std::get_if<LinkAtData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 """
 
     if "oldfd" in t:
         body += f"""    if (args->oldfd != {t["oldfd"]}) {{
-        return false;
+        return -1;
     }}
 """
 
@@ -470,7 +470,7 @@ def gen_linkat(function_name: str, t: dict):
                 assert(False)
             if "oldfd" not in t:
                 body += """    if (args->oldfd != AT_FDCWD) {
-        return false;
+        return -1;
     }
 """
             body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
@@ -489,35 +489,35 @@ def gen_linkat(function_name: str, t: dict):
 
         if len(allow_conds) > 0 and len(deny_conds) > 0:
             body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         elif len(allow_conds) > 0:
             body += f"    if ({cond_allow}) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         else:
             body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
 
-    body += "    return true;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_symlinkat(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_symlinkat) {{
-        return false;
+        return -1;
     }}
 
     const auto* args = std::get_if<SymlinkAtData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 """
 
     if "newdfd" in t:
         body += f"""    if (args->newdfd != {t["newdfd"]}) {{
-        return false;
+        return -1;
     }}
 """
 
@@ -541,7 +541,7 @@ def gen_symlinkat(function_name: str, t: dict):
 
             if "newdfd" not in t:
                 body += """    if (args->newdfd != AT_FDCWD) {
-        return false;
+        return -1;
     }
 """
             body += """    std::optional<std::string> oldname_path;
@@ -552,7 +552,7 @@ def gen_symlinkat(function_name: str, t: dict):
         auto newname_path = get_absolute_path(event.pid, args->newname);
 
         if (!newname_path.has_value()) {
-            return false;
+            return -1;
         }
 
         std::string newname_dir = fs::path(*newname_path).parent_path().string();
@@ -574,18 +574,18 @@ def gen_symlinkat(function_name: str, t: dict):
 
         if len(allow_conds) > 0 and len(deny_conds) > 0:
             body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         elif len(allow_conds) > 0:
             body += f"    if ({cond_allow}) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
         else:
             body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return false;\n"
+            body += f"        return -1;\n"
             body += f"    }}\n"
 
-    body += "    return true;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body

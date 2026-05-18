@@ -94,13 +94,13 @@ namespace engine {
 
             if (this->rules[rule_index].timeout_ns >= 0 &&
                 current_time_ns - state.start_time_ns > static_cast<unsigned long>(this->rules[rule_index].timeout_ns)) {
-                fprintf(
-                    stderr,
-                    "[DEBUG] timeout id: %lu rule_index: %lu current_state_index: %lu\n",
-                    state.id,
-                    rule_index,
-                    current_state_index
-                );
+                // fprintf(
+                //     stderr,
+                //     "[DEBUG] timeout id: %lu rule_index: %lu current_state_index: %lu\n",
+                //     state.id,
+                //     rule_index,
+                //     current_state_index
+                // );
                 done_ids.push_back(state.id);
                 continue;
             }
@@ -110,10 +110,14 @@ namespace engine {
             }
 
             // fprintf(stderr, "[DEBUG] check id: %lu current_state_index: %lu\n", state.id, current_state_index);
-            bool can = this->rules[rule_index].transitions[current_state_index](state, event);
-            if (can) {
+            int next_state_index = this->rules[rule_index].transitions[current_state_index](state, event);
+            if (next_state_index >= 0) {
                 size_t final_state_index = this->rules[rule_index].transitions.size();
-                if (current_state_index + 1 == final_state_index) {
+                if (static_cast<size_t>(next_state_index) > final_state_index) {
+                    continue;
+                }
+
+                if (static_cast<size_t>(next_state_index) == final_state_index) {
                     fprintf(
                         stderr, 
                         "[DEBUG] DETECTED: id: %lu rule index: %lu rule name: %s\n",
@@ -132,7 +136,7 @@ namespace engine {
                     // detected
                     continue;
                 }
-                state.current_state_index++;
+                state.current_state_index = static_cast<size_t>(next_state_index);
             }
         }
 
@@ -154,11 +158,15 @@ namespace engine {
             next_state.start_time_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec);
             next_state.captured.clear();
 
-            bool can = this->rules[rule_index].transitions[0](next_state, event);
-            if (can) {
+            int next_state_index = this->rules[rule_index].transitions[0](next_state, event);
+            if (next_state_index >= 0) {
                 // fprintf(stderr, "[DEBUG] run id: %lu\n", this->detection_state_count);
                 size_t final_state_index = this->rules[rule_index].transitions.size();
-                if (final_state_index == 1) {
+                if (static_cast<size_t>(next_state_index) > final_state_index) {
+                    continue;
+                }
+
+                if (static_cast<size_t>(next_state_index) == final_state_index) {
                     fprintf(
                         stderr, 
                         "[DEBUG] DETECTED: id: %lu rule index: %lu rule name: %s\n",
@@ -171,7 +179,7 @@ namespace engine {
                     continue;
                 }
 
-                next_state.current_state_index = 1;
+                next_state.current_state_index = static_cast<size_t>(next_state_index);
 
                 this->active_detection_states[next_state.id] = std::move(next_state);
                 this->detection_state_count++;

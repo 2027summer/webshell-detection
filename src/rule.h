@@ -10,7 +10,7 @@ namespace engine {
 
 struct DetectionState;
 
-using TransitionFunc = bool(*)(DetectionState&, const SyscallEvent&);
+using TransitionFunc = int(*)(DetectionState&, const SyscallEvent&);
 using DetectHandler = bool(*)(DetectionState&);
 
 struct DetectionRule {

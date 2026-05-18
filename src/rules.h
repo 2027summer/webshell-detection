@@ -38,101 +38,101 @@ static const char* openat_allow[] = {
     "/tmp/abcdefgh"
 };
 
-inline bool step_execve_bin_sh_cat_flag(DetectionState& state, const SyscallEvent& event) {
+inline int step_execve_bin_sh_cat_flag(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
-        return false;
+        return -1;
     }
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
 
     if (args->filename != "/bin/sh") {
-        return false;
+        return -1;
     }
 
     if (args->argv.size() < 3) {
-        return false;
+        return -1;
     }
 
     if (args->argv[0] != "/bin/sh") {
-        return false;
+        return -1;
     }
 
     if (args->argv[1] != "-c") {
-        return false;
+        return -1;
     }
 
     if (args->argv[2] != "cat flag.txt") {
-        return false;
+        return -1;
     }
 
     fprintf(stderr, "is_execve_bin_sh_cat_flag=true\n");
 
-    return true;
+    return static_cast<int>(state.current_state_index + 1);
 }
 
-inline bool step_openat_flag(DetectionState& state, const SyscallEvent& event) {
+inline int step_openat_flag(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
-        return false;
+        return -1;
     }
 
     const auto *args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     if (args->dirfd != AT_FDCWD) {
-        return false;
+        return -1;
     }
 
     if (args->pathname != "flag.txt") {
-        return false;
+        return -1;
     }
 
 
     fprintf(stderr, "is_openat_flag=true\n");
 
-    return true;
+    return static_cast<int>(state.current_state_index + 1);
 }
 
-inline bool step_execve_cat(DetectionState& state, const SyscallEvent& event) {
+inline int step_execve_cat(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
-        return false;
+        return -1;
     }
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     if (args->filename != "/usr/bin/cat") {
-        return false;
+        return -1;
     }
     if (args->argv.size() < 1) {
-        return false;
+        return -1;
     }
     if (args->argv[0] != "cat") {
-        return false;
+        return -1;
     }
 
     fprintf(stderr, "is_execve_cat=true\n");
 
-    return true;
+    return static_cast<int>(state.current_state_index + 1);
 }
 
-inline bool step_openat_deny(DetectionState& state, const SyscallEvent& event) {
+inline int step_openat_deny(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
-        return false;
+        return -1;
     }
 
     const auto *args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     if (args->dirfd != AT_FDCWD) {
-        return false;
+        return -1;
     }
 
     auto absolute_path = get_absolute_path(event.pid, args->pathname);
 
     if (!absolute_path.has_value()) {
-        return false;
+        return -1;
     }
 
     fprintf(stderr, "[DEBUG] path: %s\n", absolute_path->c_str());
@@ -141,11 +141,11 @@ inline bool step_openat_deny(DetectionState& state, const SyscallEvent& event) {
         std::string allow_path = std::string(openat_allow[i]);
         if (allow_path.back() == '/') {
             if (absolute_path->starts_with(allow_path)) {
-                return false;
+                return -1;
             }
         } else {
             if (absolute_path == allow_path) {
-                return false;
+                return -1;
             }
         }
     }
@@ -154,114 +154,114 @@ inline bool step_openat_deny(DetectionState& state, const SyscallEvent& event) {
         std::string deny_path = std::string(openat_deny[i]);
         if (deny_path.back() == '/') {
             if (absolute_path->starts_with(deny_path)) {
-                return true;
+                return static_cast<int>(state.current_state_index + 1);
             }
         } else {
             if (absolute_path == deny_path) {
-                return true;
+                return static_cast<int>(state.current_state_index + 1);
             }
         }
     }
 
-    return false;
+    return -1;
 }
 
-inline bool step_exeve_deny(DetectionState& state, const SyscallEvent& event) {
+inline int step_exeve_deny(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
-        return false;
+        return -1;
     }
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     auto absolute_path = get_absolute_path(event.pid, args->filename);
 
     if (!absolute_path.has_value()) {
-        return false;
+        return -1;
     }
 
     for (size_t i = 0; i < sizeof(execve_deny) / sizeof(char *); i++) {
         std::string deny_path = std::string(execve_deny[i]);
         if (deny_path.back() == '/') {
             if (absolute_path->starts_with(deny_path)) {
-                return true;
+                return static_cast<int>(state.current_state_index + 1);
             }
         } else {
             if (absolute_path == deny_path) {
-                return true;
+                return static_cast<int>(state.current_state_index + 1);
             }
         }
     }
 
-    return false;
+    return -1;
 }
 
-inline bool step_execve_grep_R(DetectionState& state, const SyscallEvent& event) {
+inline int step_execve_grep_R(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
-        return false;
+        return -1;
     }
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     for (size_t i = 1; i < args->argv.size(); i++) {
         if (args->argv[i] == "-R") {
-            return true;
+            return static_cast<int>(state.current_state_index + 1);
         }
     }
 
-    return false;
+    return -1;
 }
 
-inline bool step_bin_sh_echo_inject_1(DetectionState& state, const SyscallEvent& event) {
+inline int step_bin_sh_echo_inject_1(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_dup2) {
-        return false;
+        return -1;
     }
 
     const auto* args = std::get_if<Dup2Data>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     if (static_cast<long>(args->newfd) != 1) {
-        return false;
+        return -1;
     }
 
-    return true;
+    return static_cast<int>(state.current_state_index + 1);
 }
 
-inline bool step_bin_sh_echo_inject_2(DetectionState& state, const SyscallEvent& event) {
+inline int step_bin_sh_echo_inject_2(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_write) {
-        return false;
+        return -1;
     }
 
     if (event.from_shell == false) {
-        return false;
+        return -1;
     }
 
     const auto* args = std::get_if<WriteData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     if (args->fd != 1) {
-        return false;
+        return -1;
     }
 
     if (args->data.size() < 4) {
-        return false;
+        return -1;
     }
 
     if (args->data[0] != 0x7F) {
-        return false;
+        return -1;
     }
     if (args->data[1] != 0x45) { // E
-        return false;
+        return -1;
     }
     if (args->data[2] != 0x4C) { // L
-        return false;
+        return -1;
     }
     if (args->data[3] != 0x46) { // F
-        return false;
+        return -1;
     }
 
-    return true;
+    return static_cast<int>(state.current_state_index + 1);
 }
 
 inline bool is_db_file_path(const std::string& path) {
@@ -270,74 +270,66 @@ inline bool is_db_file_path(const std::string& path) {
            path.ends_with(".sqlite3");
 }
 
-inline bool step_openat_db(DetectionState& state, const SyscallEvent& event) {
+inline int step_openat_db(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
-        return false;
+        return -1;
     }
 
     if (!event.retval.has_value() || *event.retval < 0) {
-        return false;
+        return -1;
     }
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     if ((args->flags & O_ACCMODE) == O_WRONLY) {
-        return false;
+        return -1;
     }
-
-    // if (args->dirfd != AT_FDCWD && !args->pathname.starts_with("/")) {
-    //     return false;
-    // }
 
     auto path = get_absolute_path(event.pid, args->pathname);
     if (!path.has_value() || !is_db_file_path(*path)) {
-        return false;
+        return -1;
     }
-
-    fprintf(stderr, "%s\n", path->c_str());
 
     state.captured.push_back(*event.retval);
     state.captured.push_back(0L);
-    return true;
+    return static_cast<int>(state.current_state_index + 1);
 }
 
-inline bool step_read_db_large(DetectionState& state, const SyscallEvent& event) {
+inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_read && event.syscall_index != SYS_pread64) {
-        return false;
+        return -1;
     }
 
     if (!event.retval.has_value() || *event.retval <= 0) {
-        return false;
+        return -1;
     }
 
     if (state.captured.size() < 2) {
-        return false;
+        return -1;
     }
 
     auto db_fd = std::get_if<long>(&state.captured[0]);
     auto bytes = std::get_if<long>(&state.captured[1]);
     if (!db_fd || !bytes) {
-        return false;
+        return -1;
     }
 
     const auto* args = std::get_if<ReadData>(&event.args);
-    if (!args) return false;
+    if (!args) return -1;
 
     if (static_cast<long>(args->fd) != *db_fd) {
-        return false;
+        return -1;
     }
 
-    fprintf(stderr, "bytes: %ld\n", *bytes);
     *bytes += *event.retval;
-    // return *bytes >= 10L * 1024 * 1024;
-    // return *bytes >= 1L * 1024;
-    return *bytes >= 70000;
+    if (*bytes < 70000) {
+        return static_cast<int>(state.current_state_index);
+    }
+    return static_cast<int>(state.current_state_index + 1);
 }
 
 inline bool on_detect_db_read_large(DetectionState& state) {
-    state.current_state_index = 1;
-
     if (state.captured.size() >= 2) {
         state.captured[1] = 0L;
     }
