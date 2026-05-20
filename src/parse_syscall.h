@@ -19,4 +19,7 @@ namespace engine {
     std::optional<WriteData> parse_write(pid_t pid, __ptrace_syscall_info info);
     std::optional<Dup2Data> parse_dup2(pid_t pid, __ptrace_syscall_info info);
     std::optional<CloseData> parse_close(pid_t pid, __ptrace_syscall_info info);
+    std::optional<ReadData> parse_read(pid_t pid, __ptrace_syscall_info info);
+    std::optional<ReadData> parse_pread64(pid_t pid, __ptrace_syscall_info info);
+    std::optional<Getdents64Data> parse_getdents64(pid_t pid, __ptrace_syscall_info info);
 }

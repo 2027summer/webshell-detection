@@ -282,4 +282,26 @@ namespace engine {
             .fd = static_cast<unsigned int>(info.entry.args[0])
         };
     }
+
+    std::optional<ReadData> parse_read(pid_t, __ptrace_syscall_info info) {
+        unsigned int fd = static_cast<unsigned int>(info.entry.args[0]);
+        size_t count = static_cast<size_t>(info.entry.args[2]);
+        return ReadData {
+            .fd = fd,
+            .count = count
+        };
+    }
+
+    std::optional<ReadData> parse_pread64(pid_t pid, __ptrace_syscall_info info) {
+        return parse_read(pid, info);
+    }
+
+    std::optional<Getdents64Data> parse_getdents64(pid_t, __ptrace_syscall_info info) {
+        return Getdents64Data {
+            .fd = static_cast<unsigned int>(info.entry.args[0]),
+            .dirp = info.entry.args[1],
+            .count = static_cast<unsigned int>(info.entry.args[2]),
+            .entries = {}
+        };
+    }
 }

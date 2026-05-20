@@ -88,8 +88,22 @@ struct CloseData {
 
 struct ReadData {
     unsigned int fd;
-    std::vector<char> buf;
     size_t count;
+};
+
+struct Getdents64Entry {
+    unsigned long long ino;
+    long long off;
+    unsigned short reclen;
+    unsigned char type;
+    std::string name;
+};
+
+struct Getdents64Data {
+    unsigned int fd;
+    unsigned long dirp;
+    unsigned int count;
+    std::vector<Getdents64Entry> entries;
 };
 
 using SyscallArgs = std::variant<
@@ -107,7 +121,8 @@ using SyscallArgs = std::variant<
     ReadlinkAtData,
     Dup2Data,
     CloseData,
-    ReadData
+    ReadData,
+    Getdents64Data
 >;
 
 struct SyscallEvent {

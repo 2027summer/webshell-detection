@@ -264,6 +264,87 @@ inline bool step_bin_sh_echo_inject_2(DetectionState& state, const SyscallEvent&
     return true;
 }
 
+inline bool is_db_file_path(const std::string& path) {
+    return path.ends_with(".db") ||
+           path.ends_with(".sqlite") ||
+           path.ends_with(".sqlite3");
+}
+
+inline bool step_openat_db(DetectionState& state, const SyscallEvent& event) {
+    if (event.syscall_index != SYS_openat) {
+        return false;
+    }
+
+    if (!event.retval.has_value() || *event.retval < 0) {
+        return false;
+    }
+
+    const auto* args = std::get_if<OpenAtData>(&event.args);
+    if (!args) return false;
+
+    if ((args->flags & O_ACCMODE) == O_WRONLY) {
+        return false;
+    }
+
+    // if (args->dirfd != AT_FDCWD && !args->pathname.starts_with("/")) {
+    //     return false;
+    // }
+
+    auto path = get_absolute_path(event.pid, args->pathname);
+    if (!path.has_value() || !is_db_file_path(*path)) {
+        return false;
+    }
+
+    fprintf(stderr, "%s\n", path->c_str());
+
+    state.captured.push_back(*event.retval);
+    state.captured.push_back(0L);
+    return true;
+}
+
+inline bool step_read_db_large(DetectionState& state, const SyscallEvent& event) {
+    if (event.syscall_index != SYS_read && event.syscall_index != SYS_pread64) {
+        return false;
+    }
+
+    if (!event.retval.has_value() || *event.retval <= 0) {
+        return false;
+    }
+
+    if (state.captured.size() < 2) {
+        return false;
+    }
+
+    auto db_fd = std::get_if<long>(&state.captured[0]);
+    auto bytes = std::get_if<long>(&state.captured[1]);
+    if (!db_fd || !bytes) {
+        return false;
+    }
+
+    const auto* args = std::get_if<ReadData>(&event.args);
+    if (!args) return false;
+
+    if (static_cast<long>(args->fd) != *db_fd) {
+        return false;
+    }
+
+    fprintf(stderr, "bytes: %ld\n", *bytes);
+    *bytes += *event.retval;
+    // return *bytes >= 10L * 1024 * 1024;
+    // return *bytes >= 1L * 1024;
+    return *bytes >= 70000;
+}
+
+inline bool on_detect_db_read_large(DetectionState& state) {
+    state.current_state_index = 1;
+
+    if (state.captured.size() >= 2) {
+        state.captured[1] = 0L;
+    }
+
+    return true;
+}
+
 
 inline void register_rules(engine::Engine& engine) {
     // engine.add_rule((DetectionRule) {
@@ -306,6 +387,15 @@ inline void register_rules(engine::Engine& engine) {
             detection_rules::step_bin_sh_echo_inject_1,
             detection_rules::step_bin_sh_echo_inject_2
         },
+    });
+    engine.add_rule((DetectionRule) {
+        .name = "openat_db_read_large",
+        .timeout_ns = -1,
+        .transitions = {
+            detection_rules::step_openat_db,
+            detection_rules::step_read_db_large
+        },
+        .on_detect = detection_rules::on_detect_db_read_large,
     });
     register_codegen_rules(engine);
 }

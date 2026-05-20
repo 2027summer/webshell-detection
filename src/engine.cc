@@ -127,7 +127,7 @@ namespace engine {
                     }
 
                     if (!keep) {
-                    done_ids.push_back(state.id);
+                        done_ids.push_back(state.id);
                     }
                     // detected
                     continue;
@@ -325,8 +325,29 @@ namespace engine {
                 }
                 break;
             }
+            case SYS_read: {
+                auto args = parse_read(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_pread64: {
+                auto args = parse_pread64(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
             case SYS_write: {
                 auto args = parse_write(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_getdents64: {
+                auto args = parse_getdents64(pid, info);
                 if (args.has_value()) {
                     event.args = *args;
                 }
