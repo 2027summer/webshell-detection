@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <sys/ptrace.h>
@@ -16,17 +17,23 @@ namespace engine {
             void remove_tracked_pid(pid_t pid);
             void handle_syscall_entry(pid_t pid, const __ptrace_syscall_info info);
             void handle_syscall_exit(pid_t pid, const __ptrace_syscall_info info);
-            void process_event(const SyscallEvent& event);
+            void process_event(SyscallEvent& event);
             void process_first_transition(const SyscallEvent& event);
             void process_transition(const SyscallEvent& event);
 
             bool is_tracked(pid_t pid);
             size_t tracked();
 
+            void add_allow_execve_path(const std::string& path);
             void add_rule(DetectionRule rule);
         private:
+            void process_allow_list(const SyscallEvent& event);
+            void process_from_shell(SyscallEvent& event);
+
             std::unordered_map<pid_t, std::optional<SyscallEvent>> tracked_pids;
             std::unordered_set<pid_t> from_shell_pids;
+            std::unordered_set<std::string> allow_execve_paths;
+            std::unordered_set<pid_t> allow_pids;
             std::vector<DetectionRule> rules;    
             std::vector<DetectionState> initial_states;
             std::unordered_map<size_t, DetectionState> active_detection_states;

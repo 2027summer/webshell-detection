@@ -1,28 +1,40 @@
 #include <cstdio>
 #include <ctime>
+#include <string>
 #include <sys/syscall.h>
+#include <unistd.h>
 #include "engine.h"
 #include "detection_state.h"
 #include "parse_syscall.h"
 #include "rule.h"
 #include "syscall_event.h"
+#include "helpers.h"
 
 namespace engine {
+    void Engine::add_allow_execve_path(const std::string& path) {
+        allow_execve_paths.insert(path);
+    }
+
     void Engine::add_tracked_pid(pid_t pid, pid_t parent_pid) {
         tracked_pids[pid] = std::nullopt;
 
-        if (from_shell_pids.find(parent_pid) != from_shell_pids.end()) {
+        if (from_shell_pids.contains(parent_pid)) {
             from_shell_pids.insert(pid);
+        }
+
+        if (allow_pids.contains(parent_pid)) {
+            allow_pids.insert(pid);
         }
     }
 
     void Engine::remove_tracked_pid(pid_t pid) {
         tracked_pids.erase(pid);
         from_shell_pids.erase(pid);
+        allow_pids.erase(pid);
     }
 
     bool Engine::is_tracked(pid_t pid) {
-        return !(tracked_pids.find(pid) == tracked_pids.end());
+        return tracked_pids.contains(pid);
     }
 
     size_t Engine::tracked() {
@@ -136,7 +148,78 @@ namespace engine {
         }
     }
 
-    void Engine::process_event(const SyscallEvent& event) {
+    void Engine::process_allow_list(const SyscallEvent& event) {
+        if (event.syscall_index != SYS_execve) {
+            return;
+        }
+
+        if (allow_execve_paths.empty()) {
+            return;
+        }
+
+        // execve 성공 했는지 체크
+        if (!event.retval.has_value() || *event.retval != 0) {
+            return;
+        }
+
+        const auto* args = std::get_if<ExecveData>(&event.args);
+        if (!args) {
+            return;
+        }
+
+        auto execve_path = get_absolute_path(event.pid, args->filename);
+        if (!execve_path.has_value()) {
+            return;
+        }
+
+        if (!allow_execve_paths.contains(*execve_path)) {
+            return;
+        }
+
+        fprintf(stderr, "allowed: %s\n", execve_path->c_str());
+
+        allow_pids.insert(event.pid);
+    }
+
+    void Engine::process_from_shell(SyscallEvent& event) {
+        if (event.syscall_index != SYS_execve) {
+            return;
+        }
+
+        // execve 성공 했는지 체크
+        if (!event.retval.has_value() || *event.retval != 0) {
+            return;
+        }
+
+        const auto* args = std::get_if<ExecveData>(&event.args);
+        if (!args) {
+            return;
+        }
+
+        fprintf(stderr, "execve: %s - pid: %d\n", args->filename.c_str(), event.pid);
+
+        if (args->filename != "/bin/sh" && args->filename != "/bin/bash") {
+            return;
+        }
+        // if (args->argv.size() < 2) {
+        //     return;
+        // }
+        // if (args->argv[1] != "-c") {
+        //     return;
+        // }
+
+        from_shell_pids.insert(event.pid);
+        event.from_shell = true;
+    }
+
+    void Engine::process_event(SyscallEvent& event) {
+        process_allow_list(event);
+        process_from_shell(event);
+
+        if (allow_pids.contains(event.pid)) {
+            return;
+        }
+
         process_transition(event);
 
         // 중복 처리 방지를 위해 마지막에 호출
@@ -151,7 +234,7 @@ namespace engine {
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
 
-        bool is_from_shell = from_shell_pids.find(pid) != from_shell_pids.end();
+        bool is_from_shell = from_shell_pids.contains(pid);
 
         SyscallEvent event {
             .syscall_index = info.entry.nr,
@@ -232,16 +315,6 @@ namespace engine {
 
         long retval = parse_syscall_rval(info);
         tracked_pids[pid]->retval = retval;
-
-        if (tracked_pids[pid]->syscall_index == SYS_execve) {
-            const auto* args = std::get_if<ExecveData>(&tracked_pids[pid]->args);
-            if (args && (args->filename == "/bin/sh" || args->filename == "/bin/bash")) {
-                if (args->argv.size() >= 2 && args->argv[1] == "-c") {
-                    from_shell_pids.insert(pid);
-                    tracked_pids[pid]->from_shell = true;
-                }
-            }
-        }
 
         process_event(*tracked_pids[pid]);
     }

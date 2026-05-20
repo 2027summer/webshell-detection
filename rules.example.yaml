@@ -4,17 +4,19 @@ rules:
     transitions:
       - syscall: execve
         filename:
-          - eq: "/usr/bin/ls"
-          - eq: "/usr/bin/readlink"
-          - eq: "/usr/bin/pwd"
-          - eq: "/usr/bin/whoami"
+          deny:
+            - eq: "/usr/bin/ls"
+            - eq: "/usr/bin/readlink"
+            - eq: "/usr/bin/pwd"
+            - eq: "/usr/bin/whoami"
 
   - name: execve_ls_alter_1
     timeout_ns: 1000000000
     transitions:
       - syscall: execve
         filename: 
-          - eq: /bin/sh
+          deny:
+            - eq: /bin/sh
         argv:
           0:
             - eq: /bin/sh
@@ -24,22 +26,24 @@ rules:
       - syscall: openat
         dirfd: AT_FDCWD
         pathname:
-          - path_in:
-              - .
+          deny:
+            - path_in: .
 
   - name: execve_ls_alter_2
     timeout_ns: 1000000000
     transitions:
       - syscall: execve
         filename: 
-          - eq: /usr/bin/lsattr
+          deny:
+            - eq: /usr/bin/lsattr
 
   - name: execve_ls_alter_3
     timeout_ns: 1000000000
     transitions:
       - syscall: execve
         filename: 
-          - eq: /usr/bin/find
+          deny:
+            - eq: /usr/bin/find
         argv:
           1:
             - starts_with: .
