@@ -12,10 +12,25 @@
 #include "syscall_event.h"
 #include "rule.h"
 
+namespace detection_rules {
+int step_recursive_traversal_1(engine::DetectionState& state, const engine::SyscallEvent& event);
+int step_recursive_traversal_2(engine::DetectionState& state, const engine::SyscallEvent& event);
+}
+
 #if __has_include("codegen_rules.h")
 #include "codegen_rules.h"
 #else
 namespace detection_rules {
+inline const long recursive_traversal_threshold = 0L;
+
+inline bool is_recursive_traversal_allow_path(const std::optional<std::string>&, pid_t) {
+    return false;
+}
+
+inline bool is_recursive_traversal_deny_path(const std::optional<std::string>&, pid_t) {
+    return true;
+}
+
 inline void register_codegen_rules(engine::Engine&) {}
 }
 #endif
@@ -77,7 +92,7 @@ inline int step_openat_flag(DetectionState& state, const SyscallEvent& event) {
         return -1;
     }
 
-    const auto *args = std::get_if<OpenAtData>(&event.args);
+    const auto* args = std::get_if<OpenAtData>(&event.args);
     if (!args) return -1;
 
     if (args->dirfd != AT_FDCWD) {
@@ -122,7 +137,7 @@ inline int step_openat_deny(DetectionState& state, const SyscallEvent& event) {
         return -1;
     }
 
-    const auto *args = std::get_if<OpenAtData>(&event.args);
+    const auto* args = std::get_if<OpenAtData>(&event.args);
     if (!args) return -1;
 
     if (args->dirfd != AT_FDCWD) {
@@ -286,13 +301,14 @@ inline int step_openat_db(DetectionState& state, const SyscallEvent& event) {
         return -1;
     }
 
-    auto path = get_absolute_path(event.pid, args->pathname);
+    auto path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!path.has_value() || !is_db_file_path(*path)) {
         return -1;
     }
 
     state.captured.push_back(*event.retval);
     state.captured.push_back(0L);
+    state.captured.push_back(*path);
     return static_cast<int>(state.current_state_index + 1);
 }
 
@@ -305,13 +321,14 @@ inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) 
         return -1;
     }
 
-    if (state.captured.size() < 2) {
+    if (state.captured.size() < 3) {
         return -1;
     }
 
     auto db_fd = std::get_if<long>(&state.captured[0]);
     auto bytes = std::get_if<long>(&state.captured[1]);
-    if (!db_fd || !bytes) {
+    auto db_path = std::get_if<std::string>(&state.captured[2]);
+    if (!db_fd || !bytes || !db_path) {
         return -1;
     }
 
@@ -319,6 +336,11 @@ inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) 
     if (!args) return -1;
 
     if (static_cast<long>(args->fd) != *db_fd) {
+        return -1;
+    }
+
+    auto fd_path = get_fd_path(event.pid, args->fd);
+    if (!fd_path.has_value() || *fd_path != *db_path) {
         return -1;
     }
 
@@ -335,6 +357,108 @@ inline bool on_detect_db_read_large(DetectionState& state) {
     }
 
     return true;
+}
+
+inline int step_recursive_traversal_1(DetectionState& state, const SyscallEvent& event) {
+    if (event.syscall_index != SYS_openat) {
+        return -1;
+    }
+
+    if (!event.retval.has_value() || *event.retval < 0) {
+        return -1;
+    }
+
+    const auto* args = std::get_if<OpenAtData>(&event.args);
+    if (!args) return -1;
+
+    if (!((args->flags & O_DIRECTORY) == O_DIRECTORY)) {
+        return -1;
+    }
+
+    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
+
+    if (!absolute_path.has_value()) {
+        return -1;
+    }
+
+    if (is_recursive_traversal_allow_path(absolute_path, event.pid)) {
+        return -1;
+    }
+
+    if (!is_recursive_traversal_deny_path(absolute_path, event.pid)) {
+        return -1;
+    }
+
+    if (state.captured.size() == 0) {
+        if (!absolute_path->ends_with("/")) {
+            absolute_path->push_back('/');
+        }
+        state.captured.push_back(*absolute_path);
+        state.captured.push_back(0L);
+        state.captured.push_back(*event.retval);
+        return 1;
+    }
+
+    if (state.captured.size() != 3) {
+        return -1;
+    }
+
+    auto root = std::get_if<std::string>(&state.captured[0]);
+    auto fd = std::get_if<long>(&state.captured[2]);
+    if (!root || !fd) {
+        return -1;
+    }
+
+    if (!is_path_in(absolute_path, event.pid, *root)) {
+        return -1;
+    }
+
+    *fd = *event.retval;
+    return 1;
+}
+
+inline int step_recursive_traversal_2(DetectionState& state, const SyscallEvent& event) {
+    if (event.syscall_index != SYS_getdents64) {
+        return -1;
+    }
+
+    if (!event.retval.has_value()) {
+        return -1;
+    }
+
+    const auto* args = std::get_if<Getdents64Data>(&event.args);
+    if (!args) return -1;
+
+    if (state.captured.size() != 3) {
+        return -1;
+    }
+
+    auto expected_fd = std::get_if<long>(&state.captured[2]);
+    if (!expected_fd) {
+        return -1;
+    }
+
+    if (static_cast<long>(args->fd) != *expected_fd) {
+        return -1;
+    }
+
+    if (*event.retval < 0) {
+        return 0;
+    }
+
+    auto count = std::get_if<long>(&state.captured[1]);
+    if (!count) {
+        return -1;
+    }
+
+    *count += 1;
+
+    if (*count < recursive_traversal_threshold) {
+        return 0;
+    }
+    const auto *s = std::get_if<std::string>(&state.captured[0]);
+    fprintf(stderr, "FILENAME: %s\n", (*s).c_str());
+    return 2;
 }
 
 

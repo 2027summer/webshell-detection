@@ -18,7 +18,7 @@ def expand_home_path(path: str):
     return path
 
 
-def gen_string_match_cond(value: str, condition: dict, absolute_path: str):
+def gen_string_match_cond(value: str, condition: dict, absolute_path: str, pid: str = "event.pid"):
     assert(len(condition) == 1)
     if "eq" in condition:
         return f"{value} == \"{condition['eq']}\""
@@ -32,7 +32,7 @@ def gen_string_match_cond(value: str, condition: dict, absolute_path: str):
         path = condition["path_in"]
         assert(isinstance(path, str))
         path = expand_home_path(path)
-        return f"is_path_in({absolute_path}, event.pid, \"{path}\")"
+        return f"is_path_in({absolute_path}, {pid}, \"{path}\")"
 
     assert(False)
 
@@ -45,6 +45,9 @@ codegen_rules_h_template = f"""#include <fcntl.h>
 namespace detection_rules {{
 
 using namespace engine;
+
+int step_recursive_traversal_1(engine::DetectionState& state, const engine::SyscallEvent& event);
+int step_recursive_traversal_2(engine::DetectionState& state, const engine::SyscallEvent& event);
 
 inline bool is_path_in(const std::optional<std::string>& absolute_path, pid_t pid, const std::string& path) {{
     if (!absolute_path.has_value()) {{
@@ -61,6 +64,8 @@ inline bool is_path_in(const std::optional<std::string>& absolute_path, pid_t pi
     }}
     return *absolute_path == *path_in;
 }}
+
+[RECURSIVE_TRAVERSAL_CONFIG]
 
 [IS_FUNCTION_BODY]
 
@@ -298,11 +303,13 @@ def gen_openat(function_name: str, t: dict):
     
     if "flags" in t:
         flags = t["flags"] # expected: ["O_RDONLY", "...", ...]
-        if "O_RDONLY" in flags:
-            body += """    if (!((args->flags & O_RDONLY) == O_RDONLY)) {
+        # if "O_RDONLY" in flags:
+        for flag in flags:
+            body += f"""    if (!((args->flags & {flag}) == {flag})) {{
         return -1;
-    }
+    }}
 """
+
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
@@ -590,6 +597,57 @@ def gen_symlinkat(function_name: str, t: dict):
 
     return body
 
+def gen_recursive_traversal_config(rule: dict | None):
+    threshold = 0
+    allow_cond = "false"
+    deny_cond = "true"
+
+    if rule is not None:
+        threshold = rule["threshold"]
+        path_rule = rule.get("path", {})
+        assert(isinstance(path_rule, dict))
+
+        for key in path_rule.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = path_rule.get("allow", [])
+        deny_conds = path_rule.get("deny", [])
+        assert(isinstance(allow_conds, list))
+        assert(isinstance(deny_conds, list))
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path", "pid"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path", "pid"))
+
+        if len(allow_exprs) > 0:
+            allow_cond = " || ".join(allow_exprs)
+        if len(deny_exprs) > 0:
+            deny_cond = " || ".join(deny_exprs)
+
+    return f"""inline const long recursive_traversal_threshold = {threshold}L;
+
+inline bool is_recursive_traversal_allow_path(const std::optional<std::string>& absolute_path, pid_t pid) {{
+    if (!absolute_path.has_value()) {{
+        return false;
+    }}
+
+    return {allow_cond};
+}}
+
+inline bool is_recursive_traversal_deny_path(const std::optional<std::string>& absolute_path, pid_t pid) {{
+    if (!absolute_path.has_value()) {{
+        return false;
+    }}
+
+    return {deny_cond};
+}}
+"""
+
+
 def gen_rule_def(name: str, timeout: int, function_names: list[str]):
     functions = ",\n        ".join([
         f"detection_rules::{f_name}" for f_name in function_names 
@@ -638,14 +696,24 @@ if __name__ == "__main__":
 
     is_func_body = ""
     rule_def_body = ""
+    recursive_traversal_rule = None
 
     for rule in rules:
         name = rule["name"]
-        transitions = rule["transitions"]
         timeout = rule["timeout_ns"]
         if name in check_name:
             print("error - ")
             exit(1)
+
+        if name == "recursive_traversal":
+            recursive_traversal_rule = rule
+            rule_def_body += gen_rule_def(name, timeout, [
+                "step_recursive_traversal_1",
+                "step_recursive_traversal_2"
+            ]) + "\n"
+            continue
+
+        transitions = rule["transitions"]
         
         function_names = []
 
@@ -677,7 +745,7 @@ if __name__ == "__main__":
     a = "\n".join(["    " + l for l in gen_allow_execve_paths(allow_execve_paths).splitlines()])
     b = "\n".join(["    " + l for l in rule_def_body.splitlines()])
 
-    body = codegen_rules_h_template.replace("[IS_FUNCTION_BODY]", is_func_body).replace("[ALLOW_DEF_GEN_BODY]", a).replace("[RULE_DEF_GEN_BODY]", b)
+    body = codegen_rules_h_template.replace("[RECURSIVE_TRAVERSAL_CONFIG]", gen_recursive_traversal_config(recursive_traversal_rule)).replace("[IS_FUNCTION_BODY]", is_func_body).replace("[ALLOW_DEF_GEN_BODY]", a).replace("[RULE_DEF_GEN_BODY]", b)
 
     with open("src/codegen_rules.h", "w") as f:
         f.write(body)
