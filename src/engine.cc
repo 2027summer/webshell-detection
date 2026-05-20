@@ -25,6 +25,27 @@ namespace engine {
         if (allow_pids.contains(parent_pid)) {
             allow_pids.insert(pid);
         }
+
+        // copy_detection_states(parent_pid, pid);
+    }
+
+    void Engine::copy_detection_states(pid_t parent_pid, pid_t child_pid) {
+        std::vector<DetectionState> copied;
+
+        for (const auto& [id, state] : active_detection_states) {
+            if (state.pid != parent_pid) {
+                continue;
+            }
+
+            DetectionState child_state = state;
+            child_state.id = detection_state_count++;
+            child_state.pid = child_pid;
+            copied.push_back(std::move(child_state));
+        }
+
+        for (auto& state : copied) {
+            active_detection_states[state.id] = std::move(state);
+        }
     }
 
     void Engine::remove_tracked_pid(pid_t pid) {
@@ -71,7 +92,8 @@ namespace engine {
 
             unsigned long current_time_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec);
 
-            if (current_time_ns - state.start_time_ns > this->rules[rule_index].timeout_ns) {
+            if (this->rules[rule_index].timeout_ns >= 0 &&
+                current_time_ns - state.start_time_ns > static_cast<unsigned long>(this->rules[rule_index].timeout_ns)) {
                 fprintf(
                     stderr,
                     "[DEBUG] timeout id: %lu rule_index: %lu current_state_index: %lu\n",
@@ -99,7 +121,14 @@ namespace engine {
                         rule_index,
                         this->rules[rule_index].name.c_str()
                     );
+                    bool keep = false;
+                    if (this->rules[rule_index].on_detect.has_value()) {
+                        keep = (*this->rules[rule_index].on_detect)(state);
+                    }
+
+                    if (!keep) {
                     done_ids.push_back(state.id);
+                    }
                     // detected
                     continue;
                 }
@@ -115,7 +144,17 @@ namespace engine {
     void Engine::process_first_transition(const SyscallEvent& event) {
         for (DetectionState& initial_state : this->initial_states) {
             size_t rule_index = initial_state.rule_index;
-            bool can = this->rules[rule_index].transitions[0](initial_state, event);
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+
+            DetectionState next_state = initial_state;
+            next_state.id = this->detection_state_count;
+            next_state.pid = event.pid;
+            next_state.current_state_index = 0;
+            next_state.start_time_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec);
+            next_state.captured.clear();
+
+            bool can = this->rules[rule_index].transitions[0](next_state, event);
             if (can) {
                 // fprintf(stderr, "[DEBUG] run id: %lu\n", this->detection_state_count);
                 size_t final_state_index = this->rules[rule_index].transitions.size();
@@ -123,8 +162,8 @@ namespace engine {
                     fprintf(
                         stderr, 
                         "[DEBUG] DETECTED: id: %lu rule index: %lu rule name: %s\n",
-                        initial_state.id,
-                        initial_state.rule_index,
+                        next_state.id,
+                        next_state.rule_index,
                         this->rules[rule_index].name.c_str()
                     );
                     // step length == 1 짜리
@@ -132,15 +171,7 @@ namespace engine {
                     continue;
                 }
 
-                struct timespec ts;
-                clock_gettime(CLOCK_MONOTONIC, &ts);
-                DetectionState next_state = {
-                    .id = this->detection_state_count,
-                    .pid = event.pid,
-                    .rule_index = rule_index,
-                    .current_state_index = 1,
-                    .start_time_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec)
-                };
+                next_state.current_state_index = 1;
 
                 this->active_detection_states[next_state.id] = std::move(next_state);
                 this->detection_state_count++;

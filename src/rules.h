@@ -38,7 +38,7 @@ static const char* openat_allow[] = {
     "/tmp/abcdefgh"
 };
 
-inline bool is_execve_bin_sh_cat_flag(const DetectionState& state, const SyscallEvent& event) {
+inline bool step_execve_bin_sh_cat_flag(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
         return false;
     }
@@ -72,7 +72,7 @@ inline bool is_execve_bin_sh_cat_flag(const DetectionState& state, const Syscall
     return true;
 }
 
-inline bool is_openat_flag(const DetectionState& state, const SyscallEvent& event) {
+inline bool step_openat_flag(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
         return false;
     }
@@ -94,7 +94,7 @@ inline bool is_openat_flag(const DetectionState& state, const SyscallEvent& even
     return true;
 }
 
-inline bool is_execve_cat(const DetectionState& state, const SyscallEvent& event) {
+inline bool step_execve_cat(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
         return false;
     }
@@ -117,7 +117,7 @@ inline bool is_execve_cat(const DetectionState& state, const SyscallEvent& event
     return true;
 }
 
-inline bool is_openat_deny(const DetectionState& state, const SyscallEvent& event) {
+inline bool step_openat_deny(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
         return false;
     }
@@ -166,7 +166,7 @@ inline bool is_openat_deny(const DetectionState& state, const SyscallEvent& even
     return false;
 }
 
-inline bool is_exeve_deny(const DetectionState& state, const SyscallEvent& event) {
+inline bool step_exeve_deny(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
         return false;
     }
@@ -196,7 +196,7 @@ inline bool is_exeve_deny(const DetectionState& state, const SyscallEvent& event
     return false;
 }
 
-inline bool is_execve_grep_R(const DetectionState& state, const SyscallEvent& event) {
+inline bool step_execve_grep_R(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
         return false;
     }
@@ -213,7 +213,7 @@ inline bool is_execve_grep_R(const DetectionState& state, const SyscallEvent& ev
     return false;
 }
 
-inline bool is_bin_sh_echo_inject_1(const DetectionState& state, const SyscallEvent& event) {
+inline bool step_bin_sh_echo_inject_1(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_dup2) {
         return false;
     }
@@ -228,7 +228,7 @@ inline bool is_bin_sh_echo_inject_1(const DetectionState& state, const SyscallEv
     return true;
 }
 
-inline bool is_bin_sh_echo_inject_2(const DetectionState& state, const SyscallEvent& event) {
+inline bool step_bin_sh_echo_inject_2(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_write) {
         return false;
     }
@@ -270,8 +270,8 @@ inline void register_rules(engine::Engine& engine) {
     //     .name = "execve_cat_flag",
     //     .timeout_ns = 1000000000UL,
     //     .transitions = {
-    //         detection_rules::is_execve_bin_sh_cat_flag,
-    //         detection_rules::is_openat_flag
+    //         detection_rules::step_execve_bin_sh_cat_flag,
+    //         detection_rules::step_openat_flag
     //     },
     // });
 
@@ -279,8 +279,8 @@ inline void register_rules(engine::Engine& engine) {
     //     .name = "execve_cat_openat_deny",
     //     .timeout_ns = 1000000000UL,
     //     .transitions = {
-    //         detection_rules::is_execve_cat,
-    //         detection_rules::is_openat_deny
+    //         detection_rules::step_execve_cat,
+    //         detection_rules::step_openat_deny
     //     },
     // });
 
@@ -288,7 +288,7 @@ inline void register_rules(engine::Engine& engine) {
     //     .name = "execve_deny_path",
     //     .timeout_ns = 1000000000UL,
     //     .transitions = {
-    //         detection_rules::is_exeve_deny,
+    //         detection_rules::step_exeve_deny,
     //     },
     // });
 
@@ -296,15 +296,15 @@ inline void register_rules(engine::Engine& engine) {
         .name = "execve_grep_R",
         .timeout_ns = 1000000000UL,
         .transitions = {
-            detection_rules::is_execve_grep_R,
+            detection_rules::step_execve_grep_R,
         },
     });
     engine.add_rule((DetectionRule) {
         .name = "is_bin_sh_echo_inject",
         .timeout_ns = 1000000000UL,
         .transitions = {
-            detection_rules::is_bin_sh_echo_inject_1,
-            detection_rules::is_bin_sh_echo_inject_2
+            detection_rules::step_bin_sh_echo_inject_1,
+            detection_rules::step_bin_sh_echo_inject_2
         },
     });
     register_codegen_rules(engine);

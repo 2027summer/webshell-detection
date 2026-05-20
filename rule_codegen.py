@@ -72,7 +72,7 @@ inline void register_codegen_rules(engine::Engine& engine) {{
 
 
 def gen_execve(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(const DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_execve) {{
         return false;
     }}
@@ -231,7 +231,7 @@ def gen_execve(function_name: str, t: dict):
     return body
 
 def gen_openat(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(const DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
         return false;
     }}
@@ -309,7 +309,7 @@ def gen_openat(function_name: str, t: dict):
     return body
 
 def gen_unlinkat(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(const DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_unlinkat) {{
         return false;
     }}
@@ -379,7 +379,7 @@ def gen_unlinkat(function_name: str, t: dict):
     return body
 
 def gen_renameat2(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(const DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_renameat2) {{
         return false;
     }}
@@ -436,7 +436,7 @@ def gen_renameat2(function_name: str, t: dict):
     return body
 
 def gen_linkat(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(const DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_linkat) {{
         return false;
     }}
@@ -506,7 +506,7 @@ def gen_linkat(function_name: str, t: dict):
     return body
 
 def gen_symlinkat(function_name: str, t: dict):
-    body = f"""inline bool {function_name}(const DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline bool {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_symlinkat) {{
         return false;
     }}
@@ -596,7 +596,7 @@ def gen_rule_def(name: str, timeout: int, function_names: list[str]):
     ])
     body = f"""engine.add_rule((DetectionRule) {{
     .name = "{name}",
-    .timeout_ns = {timeout}UL,
+    .timeout_ns = {timeout}L,
     .transitions = {{
         {functions}
     }},
@@ -650,7 +650,7 @@ if __name__ == "__main__":
         function_names = []
 
         for i, t in enumerate(transitions):
-            function_name = f"is_{name}_{i}"
+            function_name = f"step_{name}_{i}"
             function_names.append(function_name)
 
             if t["syscall"] == "execve":

@@ -27,6 +27,7 @@ namespace engine {
             void add_allow_execve_path(const std::string& path);
             void add_rule(DetectionRule rule);
         private:
+            void copy_detection_states(pid_t parent_pid, pid_t child_pid);
             void process_allow_list(const SyscallEvent& event);
             void process_from_shell(SyscallEvent& event);
 
