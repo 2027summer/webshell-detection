@@ -4,10 +4,16 @@ obj/*
 .clangd
 .claude/
 .opencode/
+opencode.json
 .windsurf/
 .cursor/
+.codeiumignore
 CLAUDE.md
 AGENTS.md
 src/codegen_rules.h
 __pycache__
 rules.yaml
+results*/
+data/
+rules/
+plan/
