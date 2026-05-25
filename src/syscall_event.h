@@ -20,6 +20,18 @@ struct WriteData {
     size_t count;
 };
 
+struct SendToData {
+    int fd;
+    size_t len;
+};
+
+struct ConnectData {
+    int fd;
+    int family;
+    std::string addr;
+    int port;
+};
+
 struct ExecveData {
     std::string filename;
     std::vector<std::string> argv;
@@ -28,6 +40,28 @@ struct ExecveData {
 
 struct ChdirData {
     std::string filename;
+};
+
+struct ChmodData {
+    std::string pathname;
+    int mode;
+};
+
+struct FchmodAtData {
+    int dfd;
+    std::string pathname;
+    int mode;
+    int flags;
+};
+
+struct TruncateData {
+    std::string pathname;
+    long length;
+};
+
+struct FtruncateData {
+    int fd;
+    long length;
 };
 
 struct UnlinkAtData {
@@ -112,6 +146,10 @@ using SyscallArgs = std::variant<
     WriteData,
     ExecveData,
     ChdirData,
+    ChmodData,
+    FchmodAtData,
+    TruncateData,
+    FtruncateData,
     UnlinkAtData,
     RenameData,
     RenameAtData,
@@ -122,6 +160,8 @@ using SyscallArgs = std::variant<
     Dup2Data,
     CloseData,
     ReadData,
+    SendToData,
+    ConnectData,
     Getdents64Data
 >;
 

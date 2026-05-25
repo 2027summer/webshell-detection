@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <arpa/inet.h>
 #include <cstring>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include "parse_syscall.h"
 #include "syscall_event.h"
 
@@ -130,6 +133,62 @@ namespace engine {
 
         return ChdirData {
             .filename = *filename
+        };
+    }
+
+    std::optional<ChmodData> parse_chmod(pid_t pid, __ptrace_syscall_info info) {
+        auto pathname = read_child_string(pid, info.entry.args[0]);
+        int mode = static_cast<int>(info.entry.args[1]);
+
+        if (!pathname.has_value()) {
+            return std::nullopt;
+        }
+
+        return ChmodData {
+            .pathname = *pathname,
+            .mode = mode
+        };
+    }
+
+    std::optional<FchmodAtData> parse_fchmodat(pid_t pid, __ptrace_syscall_info info) {
+        int dfd = static_cast<int>(info.entry.args[0]);
+        auto pathname = read_child_string(pid, info.entry.args[1]);
+        int mode = static_cast<int>(info.entry.args[2]);
+        int flags = static_cast<int>(info.entry.args[3]);
+
+        if (!pathname.has_value()) {
+            return std::nullopt;
+        }
+
+        return FchmodAtData {
+            .dfd = dfd,
+            .pathname = *pathname,
+            .mode = mode,
+            .flags = flags
+        };
+    }
+
+    std::optional<TruncateData> parse_truncate(pid_t pid, __ptrace_syscall_info info) {
+        auto pathname = read_child_string(pid, info.entry.args[0]);
+        long length = static_cast<long>(info.entry.args[1]);
+
+        if (!pathname.has_value()) {
+            return std::nullopt;
+        }
+
+        return TruncateData {
+            .pathname = *pathname,
+            .length = length
+        };
+    }
+
+    std::optional<FtruncateData> parse_ftruncate(pid_t, __ptrace_syscall_info info) {
+        int fd = static_cast<int>(info.entry.args[0]);
+        long length = static_cast<long>(info.entry.args[1]);
+
+        return FtruncateData {
+            .fd = fd,
+            .length = length
         };
     }
 
@@ -267,6 +326,47 @@ namespace engine {
             .fd = fd,
             .data = *data,
             .count = count
+        };
+    }
+
+    std::optional<WriteData> parse_pwrite64(pid_t pid, __ptrace_syscall_info info) {
+        return parse_write(pid, info);
+    }
+
+    std::optional<SendToData> parse_sendto(pid_t, __ptrace_syscall_info info) {
+        return SendToData {
+            .fd = static_cast<int>(info.entry.args[0]),
+            .len = static_cast<size_t>(info.entry.args[2])
+        };
+    }
+
+    std::optional<ConnectData> parse_connect(pid_t pid, __ptrace_syscall_info info) {
+        int fd = static_cast<int>(info.entry.args[0]);
+        size_t addrlen = std::min(static_cast<size_t>(info.entry.args[2]), sizeof(sockaddr_storage));
+        auto bytes = read_child_bytes(pid, info.entry.args[1], addrlen);
+        if (!bytes.has_value() || bytes->size() < sizeof(sa_family_t)) {
+            return std::nullopt;
+        }
+
+        const auto* sa = reinterpret_cast<const sockaddr*>(bytes->data());
+        char addr[INET6_ADDRSTRLEN] = {0};
+        int port = 0;
+
+        if (sa->sa_family == AF_INET && bytes->size() >= sizeof(sockaddr_in)) {
+            const auto* in = reinterpret_cast<const sockaddr_in*>(bytes->data());
+            inet_ntop(AF_INET, &in->sin_addr, addr, sizeof(addr));
+            port = ntohs(in->sin_port);
+        } else if (sa->sa_family == AF_INET6 && bytes->size() >= sizeof(sockaddr_in6)) {
+            const auto* in6 = reinterpret_cast<const sockaddr_in6*>(bytes->data());
+            inet_ntop(AF_INET6, &in6->sin6_addr, addr, sizeof(addr));
+            port = ntohs(in6->sin6_port);
+        }
+
+        return ConnectData {
+            .fd = fd,
+            .family = static_cast<int>(sa->sa_family),
+            .addr = addr,
+            .port = port
         };
     }
 

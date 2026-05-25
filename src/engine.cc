@@ -315,6 +315,20 @@ namespace engine {
                 }
                 break;
             }
+            case SYS_rename: {
+                auto args = parse_rename(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_renameat: {
+                auto args = parse_renameat(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
             case SYS_linkat: {
                 auto args = parse_linkat(pid, info);
                 if (args.has_value()) {
@@ -331,6 +345,34 @@ namespace engine {
             }
             case SYS_unlinkat: {
                 auto args = parse_unlinkat(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_chmod: {
+                auto args = parse_chmod(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_fchmodat: {
+                auto args = parse_fchmodat(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_truncate: {
+                auto args = parse_truncate(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_ftruncate: {
+                auto args = parse_ftruncate(pid, info);
                 if (args.has_value()) {
                     event.args = *args;
                 }
@@ -359,6 +401,27 @@ namespace engine {
             }
             case SYS_write: {
                 auto args = parse_write(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_pwrite64: {
+                auto args = parse_pwrite64(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_sendto: {
+                auto args = parse_sendto(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_connect: {
+                auto args = parse_connect(pid, info);
                 if (args.has_value()) {
                     event.args = *args;
                 }
