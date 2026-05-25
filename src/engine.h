@@ -40,5 +40,6 @@ namespace engine {
             std::unordered_map<size_t, DetectionState> active_detection_states;
 
             size_t detection_state_count = 0;
+            bool detection_started = false;
     };
 }

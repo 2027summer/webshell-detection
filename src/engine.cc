@@ -255,6 +255,16 @@ namespace engine {
         process_allow_list(event);
         process_from_shell(event);
 
+        if (!detection_started) {
+            if (event.syscall_index != SYS_listen ||
+                !event.retval.has_value() ||
+                *event.retval != 0) {
+                return;
+            }
+
+            detection_started = true;
+        }
+
         if (allow_pids.contains(event.pid)) {
             return;
         }
