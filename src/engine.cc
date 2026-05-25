@@ -237,7 +237,8 @@ namespace engine {
 
         fprintf(stderr, "execve: %s - pid: %d\n", args->filename.c_str(), event.pid);
 
-        if (args->filename != "/bin/sh" && args->filename != "/bin/bash") {
+        if (args->filename != "/bin/sh" && args->filename != "/usr/bin/sh" &&
+            args->filename != "/bin/bash" && args->filename != "/usr/bin/bash") {
             return;
         }
         // if (args->argv.size() < 2) {
