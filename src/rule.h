@@ -25,6 +25,7 @@ struct DetectionRule {
     long timeout_ns;
     std::vector<TransitionFunc> transitions;
     std::optional<DetectHandler> on_detect;
+    bool inherit_on_fork = false;
 };
 
 } // namespace engine

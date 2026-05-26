@@ -26,7 +26,7 @@ namespace engine {
             allow_pids.insert(pid);
         }
 
-        // copy_detection_states(parent_pid, pid);
+        copy_detection_states(parent_pid, pid);
     }
 
     void Engine::copy_detection_states(pid_t parent_pid, pid_t child_pid) {
@@ -34,6 +34,9 @@ namespace engine {
 
         for (const auto& [id, state] : active_detection_states) {
             if (state.pid != parent_pid) {
+                continue;
+            }
+            if (!rules[state.rule_index].inherit_on_fork) {
                 continue;
             }
 
@@ -217,7 +220,7 @@ namespace engine {
         if (!execve_path.has_value()) {
             return;
         }
-
+        
         if (!allow_execve_paths.contains(*execve_path)) {
             return;
         }
