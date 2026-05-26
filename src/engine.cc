@@ -10,6 +10,10 @@
 #include "syscall_event.h"
 #include "helpers.h"
 
+#ifndef DETECTION_REQUIRE_LISTEN
+#define DETECTION_REQUIRE_LISTEN 1
+#endif
+
 namespace engine {
     void Engine::add_allow_execve_path(const std::string& path) {
         allow_execve_paths.insert(path);
@@ -266,6 +270,7 @@ namespace engine {
         process_allow_list(event);
         process_from_shell(event);
 
+#if DETECTION_REQUIRE_LISTEN
         if (!detection_started) {
             if (event.syscall_index != SYS_listen ||
                 !event.retval.has_value() ||
@@ -275,6 +280,7 @@ namespace engine {
 
             detection_started = true;
         }
+#endif
 
         if (allow_pids.contains(event.pid)) {
             return;
