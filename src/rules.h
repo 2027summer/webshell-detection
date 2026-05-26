@@ -53,7 +53,7 @@ static const char* openat_allow[] = {
     "/tmp/abcdefgh"
 };
 
-inline int step_execve_bin_sh_cat_flag(DetectionState& state, const SyscallEvent& event) {
+inline int step_execve_bin_sh_cat_flag(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
         return -1;
     }
@@ -87,7 +87,7 @@ inline int step_execve_bin_sh_cat_flag(DetectionState& state, const SyscallEvent
     return static_cast<int>(state.current_state_index + 1);
 }
 
-inline int step_openat_flag(DetectionState& state, const SyscallEvent& event) {
+inline int step_openat_flag(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
         return -1;
     }
@@ -109,7 +109,7 @@ inline int step_openat_flag(DetectionState& state, const SyscallEvent& event) {
     return static_cast<int>(state.current_state_index + 1);
 }
 
-inline int step_execve_cat(DetectionState& state, const SyscallEvent& event) {
+inline int step_execve_cat(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
         return -1;
     }
@@ -132,7 +132,7 @@ inline int step_execve_cat(DetectionState& state, const SyscallEvent& event) {
     return static_cast<int>(state.current_state_index + 1);
 }
 
-inline int step_openat_deny(DetectionState& state, const SyscallEvent& event) {
+inline int step_openat_deny(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
         return -1;
     }
@@ -181,7 +181,7 @@ inline int step_openat_deny(DetectionState& state, const SyscallEvent& event) {
     return -1;
 }
 
-inline int step_exeve_deny(DetectionState& state, const SyscallEvent& event) {
+inline int step_execve_deny(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
         return -1;
     }
@@ -211,24 +211,7 @@ inline int step_exeve_deny(DetectionState& state, const SyscallEvent& event) {
     return -1;
 }
 
-inline int step_execve_grep_R(DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_execve) {
-        return -1;
-    }
-
-    const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return -1;
-
-    for (size_t i = 1; i < args->argv.size(); i++) {
-        if (args->argv[i] == "-R") {
-            return static_cast<int>(state.current_state_index + 1);
-        }
-    }
-
-    return -1;
-}
-
-inline int step_bin_sh_echo_inject_1(DetectionState& state, const SyscallEvent& event) {
+inline int step_bin_sh_echo_inject_1(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_dup2) {
         return -1;
     }
@@ -243,7 +226,7 @@ inline int step_bin_sh_echo_inject_1(DetectionState& state, const SyscallEvent& 
     return static_cast<int>(state.current_state_index + 1);
 }
 
-inline int step_bin_sh_echo_inject_2(DetectionState& state, const SyscallEvent& event) {
+inline int step_bin_sh_echo_inject_2(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_write) {
         return -1;
     }
@@ -285,7 +268,7 @@ inline bool is_db_file_path(const std::string& path) {
            path.ends_with(".sqlite3");
 }
 
-inline int step_openat_db(DetectionState& state, const SyscallEvent& event) {
+inline int step_openat_db(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
         return -1;
     }
@@ -312,7 +295,7 @@ inline int step_openat_db(DetectionState& state, const SyscallEvent& event) {
     return static_cast<int>(state.current_state_index + 1);
 }
 
-inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) {
+inline int step_read_db_large(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_read && event.syscall_index != SYS_pread64) {
         return -1;
     }
@@ -359,7 +342,7 @@ inline bool on_detect_db_read_large(DetectionState& state) {
     return true;
 }
 
-inline int step_recursive_traversal_1(DetectionState& state, const SyscallEvent& event) {
+inline int step_recursive_traversal_1(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
         return -1;
     }
@@ -417,7 +400,7 @@ inline int step_recursive_traversal_1(DetectionState& state, const SyscallEvent&
     return 1;
 }
 
-inline int step_recursive_traversal_2(DetectionState& state, const SyscallEvent& event) {
+inline int step_recursive_traversal_2(Context& ctx, DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_getdents64) {
         return -1;
     }

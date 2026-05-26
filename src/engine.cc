@@ -52,6 +52,7 @@ namespace engine {
         tracked_pids.erase(pid);
         from_shell_pids.erase(pid);
         allow_pids.erase(pid);
+        storage.erase(pid);
     }
 
     bool Engine::is_tracked(pid_t pid) {
@@ -109,8 +110,11 @@ namespace engine {
                 continue;
             }
 
+            Context ctx = {
+                .storage = storage[event.pid]
+            };
             // fprintf(stderr, "[DEBUG] check id: %lu current_state_index: %lu\n", state.id, current_state_index);
-            int next_state_index = this->rules[rule_index].transitions[current_state_index](state, event);
+            int next_state_index = this->rules[rule_index].transitions[current_state_index](ctx, state, event);
             if (next_state_index >= 0) {
                 size_t final_state_index = this->rules[rule_index].transitions.size();
                 if (static_cast<size_t>(next_state_index) > final_state_index) {
@@ -158,7 +162,10 @@ namespace engine {
             next_state.start_time_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec);
             next_state.captured.clear();
 
-            int next_state_index = this->rules[rule_index].transitions[0](next_state, event);
+            Context ctx = {
+                .storage = storage[event.pid]
+            };
+            int next_state_index = this->rules[rule_index].transitions[0](ctx, next_state, event);
             if (next_state_index >= 0) {
                 // fprintf(stderr, "[DEBUG] run id: %lu\n", this->detection_state_count);
                 size_t final_state_index = this->rules[rule_index].transitions.size();

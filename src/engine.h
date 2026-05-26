@@ -11,6 +11,8 @@
 #include "syscall_event.h"
 
 namespace engine {
+    using Storage = std::unordered_map<std::string, std::variant<long, std::string>>;
+
     class Engine {
         public:
             void add_tracked_pid(pid_t pid, pid_t parent_pid = 0);
@@ -38,6 +40,8 @@ namespace engine {
             std::vector<DetectionRule> rules;    
             std::vector<DetectionState> initial_states;
             std::unordered_map<size_t, DetectionState> active_detection_states;
+            
+            std::unordered_map<pid_t, Storage> storage;
 
             size_t detection_state_count = 0;
             bool detection_started = false;

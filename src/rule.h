@@ -3,14 +3,21 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <variant>
 #include "syscall_event.h"
 #include "detection_state.h"
 
 namespace engine {
 
 struct DetectionState;
+using Storage = std::unordered_map<std::string, std::variant<long, std::string>>;
 
-using TransitionFunc = int(*)(DetectionState&, const SyscallEvent&);
+struct Context {
+    Storage &storage;
+};
+
+using TransitionFunc = int(*)(Context&, DetectionState&, const SyscallEvent&);
 using DetectHandler = bool(*)(DetectionState&);
 
 struct DetectionRule {
