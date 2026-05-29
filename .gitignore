@@ -17,3 +17,5 @@ results*/
 data/
 rules/
 plan/
+test-results/
+venv/
