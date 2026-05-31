@@ -14,7 +14,272 @@
 #define DETECTION_REQUIRE_LISTEN 1
 #endif
 
+#ifndef DETECTION_DEBUG
+#define DETECTION_DEBUG 0
+#endif
+
 namespace engine {
+#if DETECTION_DEBUG
+    const char* debug_syscall_name(unsigned long syscall_index) {
+        switch (syscall_index) {
+            case SYS_execve: return "execve";
+            case SYS_execveat: return "execveat";
+            case SYS_openat: return "openat";
+            case SYS_read: return "read";
+            case SYS_pread64: return "pread64";
+            case SYS_write: return "write";
+            case SYS_pwrite64: return "pwrite64";
+            case SYS_connect: return "connect";
+            case SYS_sendto: return "sendto";
+            case SYS_chdir: return "chdir";
+            case SYS_chmod: return "chmod";
+            case SYS_fchmodat: return "fchmodat";
+            case SYS_truncate: return "truncate";
+            case SYS_ftruncate: return "ftruncate";
+            case SYS_unlinkat: return "unlinkat";
+            case SYS_rename: return "rename";
+            case SYS_renameat: return "renameat";
+            case SYS_renameat2: return "renameat2";
+            case SYS_linkat: return "linkat";
+            case SYS_symlinkat: return "symlinkat";
+            case SYS_readlinkat: return "readlinkat";
+            case SYS_dup2: return "dup2";
+            case SYS_close: return "close";
+            case SYS_getdents64: return "getdents64";
+            default: return "unknown";
+        }
+    }
+
+    void debug_print_escaped(const char* key, const std::string& value) {
+        fprintf(stderr, "    %s=\"", key);
+        size_t limit = value.size() < 256 ? value.size() : 256;
+        for (size_t i = 0; i < limit; i++) {
+            unsigned char c = static_cast<unsigned char>(value[i]);
+            if (c == '\\' || c == '\"') {
+                fprintf(stderr, "\\%c", c);
+            } else if (c == '\n') {
+                fprintf(stderr, "\\n");
+            } else if (c == '\r') {
+                fprintf(stderr, "\\r");
+            } else if (c == '\t') {
+                fprintf(stderr, "\\t");
+            } else if (c >= 32 && c < 127) {
+                fprintf(stderr, "%c", c);
+            } else {
+                fprintf(stderr, "\\x%02x", c);
+            }
+        }
+        if (value.size() > limit) {
+            fprintf(stderr, "...");
+        }
+        fprintf(stderr, "\"\n");
+    }
+
+    void debug_print_string_vector(const char* name, const std::vector<std::string>& values) {
+        fprintf(stderr, "    %s_count=%zu\n", name, values.size());
+        size_t limit = values.size() < 16 ? values.size() : 16;
+        for (size_t i = 0; i < limit; i++) {
+            char key[64];
+            snprintf(key, sizeof(key), "%s[%zu]", name, i);
+            debug_print_escaped(key, values[i]);
+        }
+    }
+
+    void debug_print_env_value(const std::vector<std::string>& envp, const char* name) {
+        auto value = get_env_value(envp, name);
+        if (!value.has_value()) {
+            return;
+        }
+        char key[64];
+        snprintf(key, sizeof(key), "env[%s]", name);
+        debug_print_escaped(key, *value);
+    }
+
+    void debug_print_data_prefix(const std::vector<char>& data) {
+        size_t limit = data.size() < 64 ? data.size() : 64;
+        fprintf(stderr, "    data_prefix_hex=");
+        for (size_t i = 0; i < limit; i++) {
+            fprintf(stderr, "%02x", static_cast<unsigned char>(data[i]));
+        }
+        if (data.size() > limit) {
+            fprintf(stderr, "...");
+        }
+        fprintf(stderr, "\n");
+    }
+
+    struct DebugSyscallArgsBlock {
+        ~DebugSyscallArgsBlock() {
+            fprintf(stderr, "[DEBUG_SYSCALL_ARGS_END]\n");
+        }
+    };
+
+    void debug_print_syscall_event(const DetectionRule& rule, const DetectionState& state, const SyscallEvent& event) {
+        fprintf(stderr, "[DEBUG_SYSCALL_ARGS_BEGIN]\n");
+        DebugSyscallArgsBlock debug_block;
+
+        fprintf(stderr,
+            "[DEBUG] syscall args: rule=%s pid=%d state=%zu syscall=%s(%lu)",
+            rule.name.c_str(),
+            event.pid,
+            state.current_state_index,
+            debug_syscall_name(event.syscall_index),
+            event.syscall_index
+        );
+        if (event.retval.has_value()) {
+            fprintf(stderr, " retval=%ld", *event.retval);
+        }
+        fprintf(stderr, "\n");
+
+        if (const auto* args = std::get_if<ExecveData>(&event.args)) {
+            debug_print_escaped("filename", args->filename);
+            auto path = get_execve_path(event.pid, args->filename);
+            if (path.has_value()) {
+                debug_print_escaped("resolved", *path);
+            }
+            debug_print_string_vector("argv", args->argv);
+            fprintf(stderr, "    envp_count=%zu\n", args->envp.size());
+            debug_print_env_value(args->envp, "LD_PRELOAD");
+            debug_print_env_value(args->envp, "LD_LIBRARY_PATH");
+            return;
+        }
+
+        if (const auto* args = std::get_if<ExecveAtData>(&event.args)) {
+            fprintf(stderr, "    dirfd=%d flags=%d\n", args->dirfd, args->flags);
+            debug_print_escaped("pathname", args->pathname);
+            auto path = get_execveat_path(event.pid, args->dirfd, args->pathname);
+            if (path.has_value()) {
+                debug_print_escaped("resolved", *path);
+            }
+            debug_print_string_vector("argv", args->argv);
+            fprintf(stderr, "    envp_count=%zu\n", args->envp.size());
+            debug_print_env_value(args->envp, "LD_PRELOAD");
+            debug_print_env_value(args->envp, "LD_LIBRARY_PATH");
+            return;
+        }
+
+        if (const auto* args = std::get_if<OpenAtData>(&event.args)) {
+            fprintf(stderr, "    dirfd=%d flags=%d mode=%d\n", args->dirfd, args->flags, args->mode);
+            debug_print_escaped("pathname", args->pathname);
+            auto path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
+            if (path.has_value()) {
+                debug_print_escaped("resolved", *path);
+            }
+            return;
+        }
+
+        if (const auto* args = std::get_if<WriteData>(&event.args)) {
+            fprintf(stderr, "    fd=%u count=%zu data_size=%zu\n", args->fd, args->count, args->data.size());
+            debug_print_data_prefix(args->data);
+            return;
+        }
+
+        if (const auto* args = std::get_if<ReadData>(&event.args)) {
+            fprintf(stderr, "    fd=%u count=%zu\n", args->fd, args->count);
+            return;
+        }
+
+        if (const auto* args = std::get_if<ConnectData>(&event.args)) {
+            fprintf(stderr, "    fd=%d family=%d port=%d\n", args->fd, args->family, args->port);
+            debug_print_escaped("addr", args->addr);
+            return;
+        }
+
+        if (const auto* args = std::get_if<SendToData>(&event.args)) {
+            fprintf(stderr, "    fd=%d len=%zu\n", args->fd, args->len);
+            return;
+        }
+
+        if (const auto* args = std::get_if<ChdirData>(&event.args)) {
+            debug_print_escaped("filename", args->filename);
+            return;
+        }
+
+        if (const auto* args = std::get_if<ChmodData>(&event.args)) {
+            fprintf(stderr, "    mode=%d\n", args->mode);
+            debug_print_escaped("pathname", args->pathname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<FchmodAtData>(&event.args)) {
+            fprintf(stderr, "    dfd=%d mode=%d flags=%d\n", args->dfd, args->mode, args->flags);
+            debug_print_escaped("pathname", args->pathname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<TruncateData>(&event.args)) {
+            fprintf(stderr, "    length=%ld\n", args->length);
+            debug_print_escaped("pathname", args->pathname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<FtruncateData>(&event.args)) {
+            fprintf(stderr, "    fd=%d length=%ld\n", args->fd, args->length);
+            return;
+        }
+
+        if (const auto* args = std::get_if<UnlinkAtData>(&event.args)) {
+            fprintf(stderr, "    dfd=%d flags=%d\n", args->dfd, args->flags);
+            debug_print_escaped("pathname", args->pathname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<RenameData>(&event.args)) {
+            debug_print_escaped("oldname", args->oldname);
+            debug_print_escaped("newname", args->newname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<RenameAtData>(&event.args)) {
+            fprintf(stderr, "    oldfd=%d newfd=%d\n", args->oldfd, args->newfd);
+            debug_print_escaped("oldname", args->oldname);
+            debug_print_escaped("newname", args->newname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<RenameAt2Data>(&event.args)) {
+            fprintf(stderr, "    oldfd=%d newfd=%d flags=%u\n", args->oldfd, args->newfd, args->flags);
+            debug_print_escaped("oldname", args->oldname);
+            debug_print_escaped("newname", args->newname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<LinkAtData>(&event.args)) {
+            fprintf(stderr, "    oldfd=%d newfd=%d flags=%d\n", args->oldfd, args->newfd, args->flags);
+            debug_print_escaped("oldname", args->oldname);
+            debug_print_escaped("newname", args->newname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<SymlinkAtData>(&event.args)) {
+            fprintf(stderr, "    newdfd=%d\n", args->newdfd);
+            debug_print_escaped("oldname", args->oldname);
+            debug_print_escaped("newname", args->newname);
+            return;
+        }
+
+        if (const auto* args = std::get_if<ReadlinkAtData>(&event.args)) {
+            fprintf(stderr, "    dfd=%d bufsiz=%d buf_size=%zu\n", args->dfd, args->bufsiz, args->buf.size());
+            debug_print_escaped("path", args->path);
+            return;
+        }
+
+        if (const auto* args = std::get_if<Dup2Data>(&event.args)) {
+            fprintf(stderr, "    oldfd=%u newfd=%u\n", args->oldfd, args->newfd);
+            return;
+        }
+
+        if (const auto* args = std::get_if<CloseData>(&event.args)) {
+            fprintf(stderr, "    fd=%u\n", args->fd);
+            return;
+        }
+
+        if (const auto* args = std::get_if<Getdents64Data>(&event.args)) {
+            fprintf(stderr, "    fd=%u count=%u entries=%zu\n", args->fd, args->count, args->entries.size());
+            return;
+        }
+    }
+#endif
+
     std::optional<std::string> get_exec_path(const SyscallEvent& event) {
         if (event.syscall_index == SYS_execve) {
             const auto* args = std::get_if<ExecveData>(&event.args);
@@ -156,6 +421,9 @@ namespace engine {
                         rule_index,
                         this->rules[rule_index].name.c_str()
                     );
+#if DETECTION_DEBUG
+                    debug_print_syscall_event(this->rules[rule_index], state, event);
+#endif
                     bool keep = false;
                     if (this->rules[rule_index].on_detect.has_value()) {
                         keep = (*this->rules[rule_index].on_detect)(state);
@@ -208,6 +476,9 @@ namespace engine {
                         next_state.rule_index,
                         this->rules[rule_index].name.c_str()
                     );
+#if DETECTION_DEBUG
+                    debug_print_syscall_event(this->rules[rule_index], next_state, event);
+#endif
                     // step length == 1 짜리
                     // 조건 완료라서 탐지됨
                     continue;
