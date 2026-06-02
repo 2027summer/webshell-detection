@@ -19,6 +19,7 @@ namespace engine {
             void remove_tracked_pid(pid_t pid);
             void handle_syscall_entry(pid_t pid, const __ptrace_syscall_info info);
             void handle_syscall_exit(pid_t pid, const __ptrace_syscall_info info);
+            void handle_exec_stop(pid_t pid);
             void process_event(SyscallEvent& event);
             void process_first_transition(const SyscallEvent& event);
             void process_transition(const SyscallEvent& event);

@@ -552,6 +552,77 @@ namespace engine {
         event.from_shell = true;
     }
 
+    void Engine::handle_exec_stop(pid_t pid) {
+        auto it = tracked_pids.find(pid);
+        if (it == tracked_pids.end() || !it->second.has_value()) {
+            return;
+        }
+
+        auto& event = *it->second;
+        if (event.retval.has_value()) {
+            return;
+        }
+
+        if (event.syscall_index != SYS_execve && event.syscall_index != SYS_execveat) {
+            return;
+        }
+
+        event.retval = 0;
+        process_event(event);
+        it->second = std::nullopt;
+    }
+
+    void Engine::update_storage(const SyscallEvent& event) {
+        auto* fds = storage_fds(storage[event.pid]);
+        if (!fds) return;
+
+        if (event.syscall_index == SYS_openat) {
+            if (!event.retval.has_value() || *event.retval < 0) {
+                return;
+            }
+
+            const auto* args = std::get_if<OpenAtData>(&event.args);
+            if (!args) return;
+
+            auto path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
+            if (!path.has_value()) {
+                return;
+            }
+
+            (*fds)[*event.retval] = FdInfo {
+                .path = *path,
+                .flags = args->flags,
+            };
+        } else if (event.syscall_index == SYS_close) {
+            if (!event.retval.has_value() || *event.retval != 0) {
+                return;
+            }
+
+            const auto* args = std::get_if<CloseData>(&event.args);
+            if (!args) return;
+
+            fds->erase(args->fd);
+        } else if (event.syscall_index == SYS_dup2) {
+            if (!event.retval.has_value() || *event.retval < 0) {
+                return;
+            }
+
+            const auto* args = std::get_if<Dup2Data>(&event.args);
+            if (!args) return;
+            if (args->oldfd == args->newfd) {
+                return;
+            }
+
+            auto old_fd = fds->find(args->oldfd);
+            if (old_fd == fds->end()) {
+                fds->erase(args->newfd);
+                return;
+            }
+
+            (*fds)[args->newfd] = old_fd->second;
+        }
+    }
+
     void Engine::process_event(SyscallEvent& event) {
         process_allow_list(event);
         process_from_shell(event);
@@ -756,9 +827,14 @@ namespace engine {
             return;
         }
 
-        long retval = parse_syscall_rval(info);
-        tracked_pids[pid]->retval = retval;
+        auto it = tracked_pids.find(pid);
+        if (it == tracked_pids.end() || !it->second.has_value()) {
+            return;
+        }
 
-        process_event(*tracked_pids[pid]);
+        long retval = parse_syscall_rval(info);
+        it->second->retval = retval;
+
+        process_event(*it->second);
     }
 }

@@ -37,6 +37,7 @@ int main(int argc, char **argv) {
         PTRACE_O_TRACEFORK |
         PTRACE_O_TRACEVFORK |
         PTRACE_O_TRACECLONE |
+        PTRACE_O_TRACEEXEC |
         PTRACE_O_EXITKILL
     ) < 0) {
         return 1;
@@ -86,6 +87,9 @@ int main(int argc, char **argv) {
         } else if (sig == SIGTRAP && event != 0) {
             // fork가 발생한 경우 새로운 pid를 추적 대상에 포함
             switch (event) {
+                case PTRACE_EVENT_EXEC:
+                    engine.handle_exec_stop(pid);
+                    break;
                 case PTRACE_EVENT_FORK:
                 case PTRACE_EVENT_VFORK:
                 case PTRACE_EVENT_CLONE: {
