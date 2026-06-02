@@ -19,3 +19,8 @@ rules/
 plan/
 test-results/
 venv/
+
+./tests
+*.yaml
+!rules.example.yaml
+playground/
