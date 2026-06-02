@@ -7,6 +7,9 @@ OBJDIR = obj
 main: src/main.cc src/engine.cc src/parse_syscall.cc | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -o $(OBJDIR)/main $^
 
+tracer: profiler/syscall_tracer.cc src/parse_syscall.cc | $(OBJDIR)
+	$(CXX) $(CXXFLAGS) -o $(OBJDIR)/tracer $^
+
 test: tests/parse_syscall_arg_test.cc src/parse_syscall.cc | $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -o $(OBJDIR)/parse_syscall_arg_test $^
 	$(OBJDIR)/parse_syscall_arg_test
@@ -17,4 +20,4 @@ $(OBJDIR):
 clean:
 	rm -f $(OBJDIR)/*
 
-.PHONY: main test clean
+.PHONY: main tracer test clean
