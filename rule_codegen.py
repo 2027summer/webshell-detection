@@ -421,12 +421,16 @@ def gen_connect(function_name: str, t: dict):
         return -1;
     }}
 
-    if (!event.retval.has_value() || *event.retval != 0) {{
+    if (!event.retval.has_value() || (*event.retval != 0 && *event.retval != -115)) {{
         return -1;
     }}
 
     const auto* args = std::get_if<ConnectData>(&event.args);
     if (!args) return -1;
+    if (args->port == 0) {{
+        return -1;
+    }}
+    fprintf(stderr, "> %s %d %d\\n", args->addr.c_str(), args->port, args->family);
 """
 
     if "destination" in t:
