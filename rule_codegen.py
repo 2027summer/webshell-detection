@@ -101,7 +101,7 @@ def condition_has_key(condition: dict, key: str):
     return False
 
 
-def gen_allow_deny_skip_expr(check_list: dict, gen_match_cond, require_non_empty: bool = True):
+def gen_allow_deny_skip_expr(check_list: dict, gen_match_cond, require_non_empty: bool = True, indent: str = "    "):
     assert(isinstance(check_list, dict))
 
     has_allow = "allow" in check_list
@@ -124,7 +124,20 @@ def gen_allow_deny_skip_expr(check_list: dict, gen_match_cond, require_non_empty
         deny_exprs.append(gen_match_cond(cond))
 
     cond_allow = " || ".join(allow_exprs)
+    if len(allow_exprs) > 1:
+        cond_allow = "(\n"
+        for i, expr in enumerate(allow_exprs):
+            suffix = " ||" if i + 1 < len(allow_exprs) else ""
+            cond_allow += f"{indent}    {expr}{suffix}\n"
+        cond_allow += f"{indent})"
+
     cond_deny = " || ".join(deny_exprs)
+    if len(deny_exprs) > 1:
+        cond_deny = "(\n"
+        for i, expr in enumerate(deny_exprs):
+            suffix = " ||" if i + 1 < len(deny_exprs) else ""
+            cond_deny += f"{indent}    {expr}{suffix}\n"
+        cond_deny += f"{indent})"
 
     if len(allow_conds) > 0 and len(deny_conds) > 0:
         return f"({cond_allow}) || !({cond_deny})"
@@ -148,6 +161,7 @@ def gen_env_match(function_name: str, env_rules: dict):
         skip_expr = gen_allow_deny_skip_expr(
             check_list,
             lambda cond: gen_string_match_cond(f"(*{path_name})", cond, path_name),
+            indent="        ",
         )
 
         body += f"    auto {value_name} = get_env_value(args->envp, \"{name}\");\n"
@@ -1215,7 +1229,20 @@ def gen_path_skip_expr(path_name: str, path_rule: dict):
         return "false"
 
     allow_cond = " || ".join(allow_exprs)
+    if len(allow_exprs) > 1:
+        allow_cond = "(\n"
+        for i, expr in enumerate(allow_exprs):
+            suffix = " ||" if i + 1 < len(allow_exprs) else ""
+            allow_cond += f"        {expr}{suffix}\n"
+        allow_cond += "    )"
+
     deny_cond = " || ".join(deny_exprs)
+    if len(deny_exprs) > 1:
+        deny_cond = "(\n"
+        for i, expr in enumerate(deny_exprs):
+            suffix = " ||" if i + 1 < len(deny_exprs) else ""
+            deny_cond += f"        {expr}{suffix}\n"
+        deny_cond += "    )"
     if len(allow_exprs) > 0 and len(deny_exprs) > 0:
         return f"(({allow_cond}) || !({deny_cond}))"
     if len(allow_exprs) > 0:
@@ -1243,7 +1270,20 @@ def gen_allow_path_expr(path_name: str, path_rule: dict):
         deny_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
 
     cond_allow = " || ".join(allow_exprs)
+    if len(allow_exprs) > 1:
+        cond_allow = "(\n"
+        for i, expr in enumerate(allow_exprs):
+            suffix = " ||" if i + 1 < len(allow_exprs) else ""
+            cond_allow += f"        {expr}{suffix}\n"
+        cond_allow += "    )"
+
     cond_deny = " || ".join(deny_exprs)
+    if len(deny_exprs) > 1:
+        cond_deny = "(\n"
+        for i, expr in enumerate(deny_exprs):
+            suffix = " ||" if i + 1 < len(deny_exprs) else ""
+            cond_deny += f"        {expr}{suffix}\n"
+        cond_deny += "    )"
     if len(allow_conds) > 0 and len(deny_conds) > 0:
         return f"(({cond_allow}) || !({cond_deny}))"
     if len(allow_conds) > 0:
