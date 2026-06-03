@@ -1,4 +1,7 @@
 from pathlib import Path
+import os
+
+os.chdir(Path(__file__).resolve().parent)
 
 def only_alnum(s: str):
     ss = ""
@@ -680,13 +683,17 @@ if __name__ == "__main__":
         print(f"usage: python {sys.argv[0]} <rule_file_path>")
         exit(1)
     
-    rule_file_path = sys.argv[1]
+    rule_file_paths = sys.argv[1:]
 
-    data: dict
-    with open(rule_file_path, "r") as f:
-        data = yaml.safe_load(f)
+    rules: list = []
 
-    rules = data["rules"]
+    for path in rule_file_paths:
+        data: dict
+        with open(path, "r") as f:
+            data = yaml.safe_load(f)
+        rules.extend(data["rules"])
+
+    # rules = data["rules"]
     allow_execve_paths = []
     if "allow" in data: 
         allow_execve_paths = data["allow"]
