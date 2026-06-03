@@ -651,6 +651,73 @@ inline bool is_recursive_traversal_deny_path(const std::optional<std::string>& a
 """
 
 
+def gen_path_openat_count(function_name: str, rule: dict):
+    threshold = rule["threshold"]
+    path_rule = rule.get("path", {})
+    assert(isinstance(path_rule, dict))
+
+    for key in path_rule.keys():
+        assert(key == "allow" or key == "deny")
+
+    allow_conds = path_rule.get("allow", [])
+    deny_conds = path_rule.get("deny", [])
+    assert(isinstance(allow_conds, list))
+    assert(isinstance(deny_conds, list))
+
+    allow_exprs = []
+    for cond in allow_conds:
+        allow_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path"))
+
+    deny_exprs = []
+    for cond in deny_conds:
+        deny_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path"))
+
+    allow_cond = "false"
+    deny_cond = "true"
+    if len(allow_exprs) > 0:
+        allow_cond = " || ".join(allow_exprs)
+    if len(deny_exprs) > 0:
+        deny_cond = " || ".join(deny_exprs)
+
+    return f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_openat) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval < 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<OpenAtData>(&event.args);
+    if (!args) return -1;
+
+    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
+    if (!absolute_path.has_value()) {{
+        return -1;
+    }}
+
+    if ({allow_cond}) {{
+        return -1;
+    }}
+
+    if (!({deny_cond})) {{
+        return -1;
+    }}
+
+    static std::unordered_map<pid_t, long> counts;
+    long& count = counts[event.pid];
+    count += 1;
+
+    if (count < {threshold}) {{
+        return -1;
+    }}
+
+    count = 0;
+    return static_cast<int>(state.current_state_index + 1);
+}}
+"""
+
+
 def gen_rule_def(name: str, timeout: int, function_names: list[str]):
     functions = ",\n        ".join([
         f"detection_rules::{f_name}" for f_name in function_names 
@@ -718,6 +785,13 @@ if __name__ == "__main__":
                 "step_recursive_traversal_1",
                 "step_recursive_traversal_2"
             ]) + "\n"
+            continue
+
+        if name == "path_openat_count":
+            function_names = [f"step_{name}_0"]
+            is_func_body += gen_path_openat_count(function_names[0], rule)
+            is_func_body += "\n"
+            rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
             continue
 
         transitions = rule["transitions"]
