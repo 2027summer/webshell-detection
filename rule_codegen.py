@@ -298,6 +298,47 @@ def gen_execve(function_name: str, t: dict):
             body += f"        return -1;\n"
             body += f"    }}\n"
 
+    if "argv_allow" in t:
+        argv_allow = t["argv_allow"]
+        assert(isinstance(argv_allow, dict))
+        for key in argv_allow.keys():
+            assert(key == "argc" or key == "args")
+
+        argc = argv_allow["argc"]
+        argv = argv_allow["args"]
+        assert(isinstance(argc, int) and argc >= 0)
+        assert(isinstance(argv, dict))
+
+        for index in argv.keys():
+            assert(isinstance(index, int))
+            assert(index >= 0 and index < argc)
+
+        body += f"""    if (args->argv.size() == {argc}) {{
+        bool argv_allowed = true;
+"""
+        for index, conditions in argv.items():
+            assert(isinstance(conditions, list) and len(conditions) > 0)
+
+            arg = f"args->argv[{index}]"
+            absolute_path = f"argv_allow_{index}_path"
+            if any(condition_has_key(condition, "path_in") for condition in conditions):
+                body += f"        auto {absolute_path} = get_absolute_path(event.pid, {arg});\n"
+
+            l = []
+            for condition in conditions:
+                l.append(gen_string_match_cond(arg, condition, absolute_path))
+
+            cond = " || ".join(l)
+            body += f"""        if (!({cond})) {{
+            argv_allowed = false;
+        }}
+"""
+        body += """        if (argv_allowed) {
+            return -1;
+        }
+    }
+"""
+
     if "env" in t and len(t["env"]) > 0:
         env = t["env"]
         assert(isinstance(env, dict))
@@ -396,6 +437,19 @@ def gen_openat(function_name: str, t: dict):
     }}
 """
 
+    if "from_shell" in t:
+        assert(isinstance(t["from_shell"], bool))
+        if t["from_shell"]:
+            body += """    if (!event.from_shell) {
+        return -1;
+    }
+"""
+        else:
+            body += """    if (event.from_shell) {
+        return -1;
+    }
+"""
+
     if "relative" in t:
         assert(isinstance(t["relative"], bool))
         if t["relative"]:
@@ -405,6 +459,19 @@ def gen_openat(function_name: str, t: dict):
 """
         else:
             body += """    if (!args->pathname.starts_with("/")) {
+        return -1;
+    }
+"""
+
+    if "existed_before" in t:
+        assert(isinstance(t["existed_before"], bool))
+        if t["existed_before"]:
+            body += """    if (!args->existed_before) {
+        return -1;
+    }
+"""
+        else:
+            body += """    if (args->existed_before) {
         return -1;
     }
 """
@@ -479,6 +546,15 @@ def gen_openat(function_name: str, t: dict):
         # if "O_RDONLY" in flags:
         for flag in flags:
             body += f"""    if (!((args->flags & {flag}) == {flag})) {{
+        return -1;
+    }}
+"""
+
+    if "flags_unset" in t:
+        flags = t["flags_unset"]
+        assert(isinstance(flags, list))
+        for flag in flags:
+            body += f"""    if ((args->flags & {flag}) == {flag}) {{
         return -1;
     }}
 """
