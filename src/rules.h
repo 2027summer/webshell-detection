@@ -325,65 +325,57 @@ inline int step_read_db_large(Context& ctx, DetectionState& state, const Syscall
     return static_cast<int>(state.current_state_index + 1);
 }
 
-inline bool on_detect_db_read_large(DetectionState& state) {
-    if (state.captured.size() >= 2) {
-        state.captured[1] = 0L;
+inline int step_execve_grep_recursive(Context& ctx, DetectionState& state, const SyscallEvent& event) {
+    if (event.syscall_index != SYS_execve) {
+        return -1;
     }
 
-    return true;
+    const auto* args = std::get_if<ExecveData>(&event.args);
+    if (!args) return -1;
+
+    if (args->filename != "/usr/bin/grep") {
+        return -1;
+    }
+
+    size_t argc = args->argv.size();
+    if (argc < 2) {
+        return -1;
+    }
+
+    static const char* deny_options[] = {
+        "R",
+        "recursive",
+        "r",
+        "dereference-recursive",
+        nullptr
+    };
+
+    for (size_t i = 1; i < argc; i++) {
+        if (!args->argv[i].starts_with("-")) {
+            continue;
+        }
+        if (args->argv[i] == "--") {
+            break;
+        }
+
+        for (size_t j = 0; deny_options[j] != nullptr; j++) {
+            if (args->argv[i].find(deny_options[j]) != std::string::npos) {
+                return 1;
+            }
+        }
+    }
+
+    return -1;
 }
 
 
 inline void register_rules(engine::Engine& engine) {
-    // engine.add_rule((DetectionRule) {
-    //     .name = "execve_cat_flag",
-    //     .timeout_ns = 1000000000UL,
-    //     .transitions = {
-    //         detection_rules::step_execve_bin_sh_cat_flag,
-    //         detection_rules::step_openat_flag
-    //     },
-    // });
-
-    // engine.add_rule((DetectionRule) {
-    //     .name = "execve_cat_openat_deny",
-    //     .timeout_ns = 1000000000UL,
-    //     .transitions = {
-    //         detection_rules::step_execve_cat,
-    //         detection_rules::step_openat_deny
-    //     },
-    // });
-
-    // engine.add_rule((DetectionRule) {
-    //     .name = "execve_deny_path",
-    //     .timeout_ns = 1000000000UL,
-    //     .transitions = {
-    //         detection_rules::step_exeve_deny,
-    //     },
-    // });
-
     engine.add_rule((DetectionRule) {
-        .name = "execve_grep_R",
+        .name = "execve_grep_recursive",
         .timeout_ns = 1000000000UL,
         .transitions = {
-            detection_rules::step_execve_grep_R,
+            detection_rules::step_execve_grep_recursive,
         },
-    });
-    engine.add_rule((DetectionRule) {
-        .name = "is_bin_sh_echo_inject",
-        .timeout_ns = 1000000000UL,
-        .transitions = {
-            detection_rules::step_bin_sh_echo_inject_1,
-            detection_rules::step_bin_sh_echo_inject_2
-        },
-    });
-    engine.add_rule((DetectionRule) {
-        .name = "openat_db_read_large",
-        .timeout_ns = -1,
-        .transitions = {
-            detection_rules::step_openat_db,
-            detection_rules::step_read_db_large
-        },
-        .on_detect = detection_rules::on_detect_db_read_large,
     });
     register_codegen_rules(engine);
 }
