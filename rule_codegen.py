@@ -1106,7 +1106,7 @@ def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
         return -1;
     }}
 
-    if (event.timestamp_ns < counter->cooldown_until_ns) {{
+    if (event.timestamp_ns < counter->cooldown_end_ns) {{
         return -1;
     }}
 
@@ -1114,20 +1114,17 @@ def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
         event.timestamp_ns < counter->start_ns ||
         event.timestamp_ns - counter->start_ns > {window_ns}UL) {{
         counter->start_ns = event.timestamp_ns;
-        counter->total = 0;
         counter->items.clear();
     }}
 
     counter->items[*absolute_path] = 1;
-    counter->total = static_cast<long>(counter->items.size());
 
-    if (counter->total < {threshold}L) {{
+    if (static_cast<long>(counter->items.size()) < {threshold}L) {{
         return -1;
     }}
 
-    counter->cooldown_until_ns = event.timestamp_ns + {cooldown_ns}UL;
+    counter->cooldown_end_ns = event.timestamp_ns + {cooldown_ns}UL;
     counter->start_ns = event.timestamp_ns;
-    counter->total = 0;
     counter->items.clear();
     return static_cast<int>(state.current_state_index + 1);
 }}
@@ -1171,7 +1168,7 @@ def gen_path_openat_count(name: str, function_name: str, rule: dict):
         return -1;
     }}
 
-    if (event.timestamp_ns < counter->cooldown_until_ns) {{
+    if (event.timestamp_ns < counter->cooldown_end_ns) {{
         return -1;
     }}
 
@@ -1179,20 +1176,17 @@ def gen_path_openat_count(name: str, function_name: str, rule: dict):
         event.timestamp_ns < counter->start_ns ||
         event.timestamp_ns - counter->start_ns > {window_ns}UL) {{
         counter->start_ns = event.timestamp_ns;
-        counter->total = 0;
         counter->items.clear();
     }}
 
     counter->items[*absolute_path] = 1;
-    counter->total = static_cast<long>(counter->items.size());
 
-    if (counter->total < {threshold}L) {{
+    if (static_cast<long>(counter->items.size()) < {threshold}L) {{
         return -1;
     }}
 
-    counter->cooldown_until_ns = event.timestamp_ns + {cooldown_ns}UL;
+    counter->cooldown_end_ns = event.timestamp_ns + {cooldown_ns}UL;
     counter->start_ns = event.timestamp_ns;
-    counter->total = 0;
     counter->items.clear();
     return static_cast<int>(state.current_state_index + 1);
 }}

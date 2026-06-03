@@ -14,8 +14,7 @@ using FdTable = std::unordered_map<long, FdInfo>;
 
 struct Counter {
     unsigned long start_ns = 0;
-    unsigned long cooldown_until_ns = 0;
-    long total = 0;
+    unsigned long cooldown_end_ns = 0;
     std::unordered_map<std::string, long> items;
 };
 
