@@ -411,7 +411,8 @@ inline bool fd_points_to_path(pid_t pid, unsigned int fd, const std::string& pat
 inline bool is_db_file_path(const std::string& path) {
     return path.ends_with(".db") ||
            path.ends_with(".sqlite") ||
-           path.ends_with(".sqlite3");
+           path.ends_with(".sqlite3") ||
+           path.ends_with(".db3");
 }
 
 inline int step_openat_db(Context& ctx, DetectionState& state, const SyscallEvent& event) {
@@ -469,8 +470,7 @@ inline int step_read_db_large(Context& ctx, DetectionState& state, const Syscall
         return -1;
     }
 
-    auto fd_path = get_fd_path(event.pid, args->fd);
-    if (!fd_path.has_value() || *fd_path != *db_path) {
+    if (!fd_points_to_path(event.pid, args->fd, *db_path)) {
         return -1;
     }
 
