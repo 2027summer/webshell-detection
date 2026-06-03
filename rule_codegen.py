@@ -101,34 +101,54 @@ def condition_has_key(condition: dict, key: str):
     return False
 
 
+def gen_allow_deny_skip_expr(check_list: dict, gen_match_cond, require_non_empty: bool = True):
+    assert(isinstance(check_list, dict))
+
+    has_allow = "allow" in check_list
+    has_deny = "deny" in check_list
+    assert(has_allow or has_deny)
+    for key in check_list.keys():
+        assert(key == "allow" or key == "deny")
+
+    allow_conds = check_list.get("allow", [])
+    deny_conds = check_list.get("deny", [])
+    if require_non_empty:
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+    allow_exprs = []
+    for cond in allow_conds:
+        allow_exprs.append(gen_match_cond(cond))
+
+    deny_exprs = []
+    for cond in deny_conds:
+        deny_exprs.append(gen_match_cond(cond))
+
+    cond_allow = " || ".join(allow_exprs)
+    cond_deny = " || ".join(deny_exprs)
+
+    if len(allow_conds) > 0 and len(deny_conds) > 0:
+        return f"({cond_allow}) || !({cond_deny})"
+    elif len(allow_conds) > 0:
+        return cond_allow
+    elif len(deny_conds) > 0:
+        return f"!({cond_deny})"
+    return ""
+
+
 def gen_env_match(function_name: str, env_rules: dict):
     body = ""
     for name, check_list in env_rules.items():
         assert(isinstance(name, str))
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         suffix = only_alnum(name)
         value_name = f"{function_name}_{suffix}_value"
         path_name = f"{function_name}_{suffix}_path"
         matched_name = f"{function_name}_{suffix}_matched"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond(f"(*{path_name})", cond, path_name),
+        )
 
         body += f"    auto {value_name} = get_env_value(args->envp, \"{name}\");\n"
         body += f"    if (!{value_name}.has_value()) {{\n"
@@ -141,21 +161,9 @@ def gen_env_match(function_name: str, env_rules: dict):
         body += "            continue;\n"
         body += "        }\n"
 
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"        if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += "            continue;\n"
-            body += "        }\n"
-        elif len(allow_conds) > 0:
-            body += f"        if ({cond_allow}) {{\n"
-            body += "            continue;\n"
-            body += "        }\n"
-        else:
-            body += f"        if (!({cond_deny})) {{\n"
-            body += "            continue;\n"
-            body += "        }\n"
+        body += f"        if ({skip_expr}) {{\n"
+        body += "            continue;\n"
+        body += "        }\n"
 
         body += f"        {matched_name} = true;\n"
         body += "        break;\n"
@@ -222,17 +230,6 @@ def gen_execve(function_name: str, t: dict):
 
     if "filename" in t and len(t["filename"]) > 0:
         check_list = t["filename"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto filename_path = get_execve_path(event.pid, args->filename);\n"
         body += "    if (!filename_path.has_value()) {\n"
@@ -241,30 +238,14 @@ def gen_execve(function_name: str, t: dict):
         body += "\n"
 
         filename = "(*filename_path)"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond(filename, cond, "filename_path"),
+        )
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond(filename, cond, "filename_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond(filename, cond, "filename_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "argv" in t and len(t["argv"]) > 0:
         argv = t["argv"]
@@ -478,17 +459,6 @@ def gen_openat(function_name: str, t: dict):
 
     if "pathname" in t:
         check_list = t["pathname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += """    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!absolute_path.has_value()) {
@@ -497,29 +467,13 @@ def gen_openat(function_name: str, t: dict):
 """
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*absolute_path)", cond, "absolute_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "access_mode" in t:
         access_mode = t["access_mode"]
@@ -585,38 +539,13 @@ def gen_connect(function_name: str, t: dict):
 
     if "destination" in t:
         check_list = t["destination"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_destination_match_cond(cond))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_destination_match_cond(cond))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(deny_conds) > 0:
-            body += f"    if (!({cond_deny})) {{\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_destination_match_cond(cond),
+            False,
+        )
+        if len(skip_expr) > 0:
+            body += f"    if ({skip_expr}) {{\n"
             body += f"        return -1;\n"
             body += f"    }}\n"
 
@@ -647,17 +576,13 @@ def gen_unlinkat(function_name: str, t: dict):
 
     if "pathname" in t:
         check_list = t["pathname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
 
         allow_conds = check_list.get("allow", [])
         deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("args->pathname", cond, "absolute_path"),
+        )
 
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             body += "    auto absolute_path = get_absolute_path_at(event.pid, args->dfd, args->pathname);\n"
@@ -666,29 +591,9 @@ def gen_unlinkat(function_name: str, t: dict):
             body += "    }\n"
             body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("args->pathname", cond, "absolute_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("args->pathname", cond, "absolute_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
@@ -711,59 +616,24 @@ def gen_renameat2(function_name: str, t: dict):
 
     if "oldname" in t:
         oldname_rule = t["oldname"]
-        assert(isinstance(oldname_rule, dict))
-
-        has_allow = "allow" in oldname_rule
-        has_deny = "deny" in oldname_rule
-        assert(has_allow or has_deny)
-        for key in oldname_rule.keys():
-            assert(key == "allow" or key == "deny")
 
         allow_conds = oldname_rule.get("allow", [])
         deny_conds = oldname_rule.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+        skip_expr = gen_allow_deny_skip_expr(
+            oldname_rule,
+            lambda cond: gen_string_match_cond("args->oldname", cond, "oldname_path"),
+        )
 
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             body += "    auto oldname_path = get_absolute_path_at(event.pid, args->oldfd, args->oldname);\n"
             body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("args->oldname", cond, "oldname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("args->oldname", cond, "oldname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "newname" in t:
         newname_rule = t["newname"]
-        assert(isinstance(newname_rule, dict))
-
-        has_allow = "allow" in newname_rule
-        has_deny = "deny" in newname_rule
-        assert(has_allow or has_deny)
-        for key in newname_rule.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = newname_rule.get("allow", [])
-        deny_conds = newname_rule.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
@@ -771,29 +641,13 @@ def gen_renameat2(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            newname_rule,
+            lambda cond: gen_string_match_cond("(*newname_path)", cond, "newname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
@@ -817,17 +671,6 @@ def gen_rename(function_name: str, t: dict):
 
     if "oldname" in t:
         check_list = t["oldname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
         body += "    if (!oldname_path.has_value()) {\n"
@@ -835,43 +678,16 @@ def gen_rename(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*oldname_path)", cond, "oldname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*oldname_path)", cond, "oldname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*oldname_path)", cond, "oldname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "newname" in t:
         check_list = t["newname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto newname_path = get_absolute_path(event.pid, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
@@ -879,29 +695,13 @@ def gen_rename(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*newname_path)", cond, "newname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
@@ -937,17 +737,6 @@ def gen_renameat(function_name: str, t: dict):
 
     if "oldname" in t:
         check_list = t["oldname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto oldname_path = get_absolute_path_at(event.pid, args->oldfd, args->oldname);\n"
         body += "    if (!oldname_path.has_value()) {\n"
@@ -955,43 +744,16 @@ def gen_renameat(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*oldname_path)", cond, "oldname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*oldname_path)", cond, "oldname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*oldname_path)", cond, "oldname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "newname" in t:
         check_list = t["newname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
@@ -999,29 +761,13 @@ def gen_renameat(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*newname_path)", cond, "newname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
@@ -1045,17 +791,6 @@ def gen_chmod(function_name: str, t: dict):
 
     if "pathname" in t:
         check_list = t["pathname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto pathname_path = get_absolute_path(event.pid, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
@@ -1063,29 +798,13 @@ def gen_chmod(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*pathname_path)", cond, "pathname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "mode_any" in t:
         mode_any = t["mode_any"]
@@ -1123,17 +842,6 @@ def gen_fchmodat(function_name: str, t: dict):
 
     if "pathname" in t:
         check_list = t["pathname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto pathname_path = get_absolute_path_at(event.pid, args->dfd, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
@@ -1141,29 +849,13 @@ def gen_fchmodat(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*pathname_path)", cond, "pathname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "mode_any" in t:
         mode_any = t["mode_any"]
@@ -1195,17 +887,6 @@ def gen_truncate(function_name: str, t: dict):
 
     if "pathname" in t:
         check_list = t["pathname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto pathname_path = get_absolute_path(event.pid, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
@@ -1213,29 +894,13 @@ def gen_truncate(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*pathname_path)", cond, "pathname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "length" in t:
         body += f"""    if (args->length != {t["length"]}L) {{
@@ -1265,17 +930,6 @@ def gen_ftruncate(function_name: str, t: dict):
 
     if "pathname" in t:
         check_list = t["pathname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = check_list.get("allow", [])
-        deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
         body += "    auto pathname_path = get_fd_path(event.pid, args->fd);\n"
         body += "    if (!pathname_path.has_value()) {\n"
@@ -1283,29 +937,13 @@ def gen_ftruncate(function_name: str, t: dict):
         body += "    }\n"
         body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("(*pathname_path)", cond, "pathname_path"),
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     if "length" in t:
         body += f"""    if (args->length != {t["length"]}L) {{
@@ -1336,17 +974,13 @@ def gen_linkat(function_name: str, t: dict):
 
     if "oldname" in t:
         check_list = t["oldname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
 
         allow_conds = check_list.get("allow", [])
         deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("args->oldname", cond, "oldname_path"),
+        )
 
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             if "oldfd" in t and str(t["oldfd"]) != "AT_FDCWD":
@@ -1359,29 +993,9 @@ def gen_linkat(function_name: str, t: dict):
             body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
             body += "\n"
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("args->oldname", cond, "oldname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("args->oldname", cond, "oldname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
@@ -1406,17 +1020,13 @@ def gen_symlinkat(function_name: str, t: dict):
 
     if "oldname" in t:
         check_list = t["oldname"]
-        assert(isinstance(check_list, dict))
-
-        has_allow = "allow" in check_list
-        has_deny = "deny" in check_list
-        assert(has_allow or has_deny)
-        for key in check_list.keys():
-            assert(key == "allow" or key == "deny")
 
         allow_conds = check_list.get("allow", [])
         deny_conds = check_list.get("deny", [])
-        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+        skip_expr = gen_allow_deny_skip_expr(
+            check_list,
+            lambda cond: gen_string_match_cond("args->oldname", cond, "oldname_path"),
+        )
 
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             if "newdfd" in t and str(t["newdfd"]) != "AT_FDCWD":
@@ -1444,29 +1054,9 @@ def gen_symlinkat(function_name: str, t: dict):
 
 """
 
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("args->oldname", cond, "oldname_path"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("args->oldname", cond, "oldname_path"))
-
-        cond_allow = " || ".join(allow_exprs)
-        cond_deny = " || ".join(deny_exprs)
-
-        if len(allow_conds) > 0 and len(deny_conds) > 0:
-            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        elif len(allow_conds) > 0:
-            body += f"    if ({cond_allow}) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
-        else:
-            body += f"    if (!({cond_deny})) {{\n"
-            body += f"        return -1;\n"
-            body += f"    }}\n"
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return -1;\n"
+        body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
@@ -2031,6 +1621,23 @@ def gen_tar_path_policy(function_name: str, rule: dict):
 """
 
 
+syscall_generators = {
+    "execve": gen_execve,
+    "openat": gen_openat,
+    "connect": gen_connect,
+    "unlinkat": gen_unlinkat,
+    "rename": gen_rename,
+    "renameat": gen_renameat,
+    "renameat2": gen_renameat2,
+    "chmod": gen_chmod,
+    "fchmodat": gen_fchmodat,
+    "truncate": gen_truncate,
+    "ftruncate": gen_ftruncate,
+    "linkat": gen_linkat,
+    "symlinkat": gen_symlinkat,
+}
+
+
 def gen_transition(function_name: str, t: dict):
     syscall = t["syscall"]
     if isinstance(syscall, list):
@@ -2058,32 +1665,8 @@ def gen_transition(function_name: str, t: dict):
         body += "}\n"
         return body
 
-    if syscall == "execve":
-        return gen_execve(function_name, t)
-    if syscall == "openat":
-        return gen_openat(function_name, t)
-    if syscall == "connect":
-        return gen_connect(function_name, t)
-    if syscall == "unlinkat":
-        return gen_unlinkat(function_name, t)
-    if syscall == "rename":
-        return gen_rename(function_name, t)
-    if syscall == "renameat":
-        return gen_renameat(function_name, t)
-    if syscall == "renameat2":
-        return gen_renameat2(function_name, t)
-    if syscall == "chmod":
-        return gen_chmod(function_name, t)
-    if syscall == "fchmodat":
-        return gen_fchmodat(function_name, t)
-    if syscall == "truncate":
-        return gen_truncate(function_name, t)
-    if syscall == "ftruncate":
-        return gen_ftruncate(function_name, t)
-    if syscall == "linkat":
-        return gen_linkat(function_name, t)
-    if syscall == "symlinkat":
-        return gen_symlinkat(function_name, t)
+    if syscall in syscall_generators:
+        return syscall_generators[syscall](function_name, t)
 
     assert(False)
 
