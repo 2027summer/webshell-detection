@@ -1638,40 +1638,335 @@ def gen_cp_path_policy(function_name: str, rule: dict):
     destination_allow = gen_allow_path_expr("destination_path", rule["destination"])
 
     return f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
-    if (event.syscall_index != SYS_openat) {{
+{gen_exec_argv_setup(["/bin/cp", "/usr/bin/cp"])}    std::vector<std::string> paths;
+    std::optional<std::string> target_directory;
+    bool end_options = false;
+
+    for (size_t i = 1; i < argv.size(); i++) {{
+        const auto& arg = argv[i];
+        if (arg.empty() || arg == "-") {{
+            continue;
+        }}
+        if (!end_options && (arg == "--help" || arg == "--version")) {{
+            return -1;
+        }}
+        if (!end_options && arg == "--") {{
+            end_options = true;
+            continue;
+        }}
+        if (!end_options && arg.starts_with("--target-directory=")) {{
+            target_directory = arg.substr(19);
+            continue;
+        }}
+        if (!end_options && arg == "--target-directory") {{
+            if (i + 1 >= argv.size()) return -1;
+            target_directory = argv[++i];
+            continue;
+        }}
+        if (!end_options && arg.starts_with("-t") && arg.size() > 2) {{
+            target_directory = arg.substr(2);
+            continue;
+        }}
+        if (!end_options && arg == "-t") {{
+            if (i + 1 >= argv.size()) return -1;
+            target_directory = argv[++i];
+            continue;
+        }}
+        if (!end_options && (arg == "-S" || arg == "--suffix")) {{
+            if (i + 1 >= argv.size()) return -1;
+            i++;
+            continue;
+        }}
+        if (!end_options && (
+            arg.starts_with("--suffix=") ||
+            arg.starts_with("--sparse=") ||
+            arg.starts_with("--no-preserve=") ||
+            arg.starts_with("--backup=") ||
+            arg.starts_with("--preserve=") ||
+            arg.starts_with("--reflink=") ||
+            arg.starts_with("--update=") ||
+            arg.starts_with("--context=") ||
+            arg.starts_with("-S")
+        )) {{
+            continue;
+        }}
+        if (!end_options && arg.starts_with("-")) {{
+            continue;
+        }}
+        paths.push_back(arg);
+    }}
+
+    std::vector<std::string> sources;
+    std::optional<std::string> destination;
+    if (target_directory.has_value()) {{
+        if (paths.empty()) return -1;
+        sources = paths;
+        destination = *target_directory;
+    }} else {{
+        if (paths.size() < 2) return -1;
+        sources.assign(paths.begin(), paths.end() - 1);
+        destination = paths.back();
+    }}
+
+    for (const auto& source : sources) {{
+        auto source_path = get_execve_path(event.pid, source);
+        if (!source_path.has_value()) {{
+            return -1;
+        }}
+        if (!({source_allow})) {{
+            return static_cast<int>(state.current_state_index + 1);
+        }}
+    }}
+
+    auto destination_path = get_execve_path(event.pid, *destination);
+    if (!destination_path.has_value()) {{
+        return -1;
+    }}
+    if (!({destination_allow})) {{
+        return static_cast<int>(state.current_state_index + 1);
+    }}
+
+    return -1;
+}}
+"""
+
+
+def gen_zip_path_policy(function_name: str, rule: dict):
+    archive_allow = gen_allow_path_expr("archive_path", rule["archive"])
+    input_allow = gen_allow_path_expr("input_path", rule["input"])
+
+    return f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+{gen_exec_argv_setup(["/bin/zip", "/usr/bin/zip"])}    std::vector<std::string> paths;
+    bool end_options = false;
+
+    for (size_t i = 1; i < argv.size(); i++) {{
+        const auto& arg = argv[i];
+        if (arg.empty()) {{
+            continue;
+        }}
+        if (!end_options && arg == "--") {{
+            end_options = true;
+            continue;
+        }}
+        if (!end_options && (arg == "--help" || arg == "--version")) {{
+            return -1;
+        }}
+        if (!end_options && (arg == "-b" || arg == "-t" || arg == "-n")) {{
+            if (i + 1 >= argv.size()) return -1;
+            i++;
+            continue;
+        }}
+        if (!end_options && (arg == "-x" || arg == "-i")) {{
+            i++;
+            while (i < argv.size() && !argv[i].starts_with("-")) {{
+                i++;
+            }}
+            i--;
+            continue;
+        }}
+        if (!end_options && arg.starts_with("-")) {{
+            continue;
+        }}
+        if (arg != "-") {{
+            paths.push_back(arg);
+        }}
+    }}
+
+    if (paths.size() < 2) {{
         return -1;
     }}
 
-    if (!event.retval.has_value() || *event.retval < 0) {{
+    auto archive_path = get_execve_path(event.pid, paths[0]);
+    if (!archive_path.has_value()) {{
+        return -1;
+    }}
+    if (!({archive_allow})) {{
+        return static_cast<int>(state.current_state_index + 1);
+    }}
+
+    for (size_t i = 1; i < paths.size(); i++) {{
+        auto input_path = get_execve_path(event.pid, paths[i]);
+        if (!input_path.has_value()) {{
+            return -1;
+        }}
+        if (!({input_allow})) {{
+            return static_cast<int>(state.current_state_index + 1);
+        }}
+    }}
+
+    return -1;
+}}
+"""
+
+
+def gen_tar_path_policy(function_name: str, rule: dict):
+    archive_allow = gen_allow_path_expr("archive_path", rule["archive"])
+    input_allow = gen_allow_path_expr("input_path", rule["input"])
+
+    return f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+{gen_exec_argv_setup(["/bin/tar", "/usr/bin/tar"])}    std::optional<std::string> archive;
+    std::optional<std::string> current_directory;
+    std::vector<std::string> inputs;
+    std::vector<std::optional<std::string>> input_directories;
+    bool create = false;
+    bool end_options = false;
+
+    auto set_directory = [&](const std::string& dir) {{
+        if (dir.starts_with("/") || !current_directory.has_value()) {{
+            current_directory = dir;
+        }} else {{
+            current_directory = *current_directory + "/" + dir;
+        }}
+    }};
+
+    for (size_t i = 1; i < argv.size(); i++) {{
+        const auto& arg = argv[i];
+        if (arg.empty()) {{
+            continue;
+        }}
+        if (!end_options && arg == "--") {{
+            end_options = true;
+            continue;
+        }}
+        if (!end_options && (arg == "--help" || arg == "--version")) {{
+            return -1;
+        }}
+        if (!end_options && arg == "--create") {{
+            create = true;
+            continue;
+        }}
+        if (!end_options && arg.starts_with("--file=")) {{
+            archive = arg.substr(7);
+            continue;
+        }}
+        if (!end_options && arg == "--file") {{
+            if (i + 1 >= argv.size()) return -1;
+            archive = argv[++i];
+            continue;
+        }}
+        if (!end_options && arg.starts_with("--directory=")) {{
+            set_directory(arg.substr(12));
+            continue;
+        }}
+        if (!end_options && arg == "--directory") {{
+            if (i + 1 >= argv.size()) return -1;
+            set_directory(argv[++i]);
+            continue;
+        }}
+        if (!end_options && (
+            arg == "--exclude" ||
+            arg == "--transform" ||
+            arg == "--xform" ||
+            arg == "--use-compress-program" ||
+            arg == "--files-from"
+        )) {{
+            if (i + 1 >= argv.size()) return -1;
+            i++;
+            continue;
+        }}
+        if (!end_options && (
+            arg.starts_with("--exclude=") ||
+            arg.starts_with("--transform=") ||
+            arg.starts_with("--xform=") ||
+            arg.starts_with("--use-compress-program=") ||
+            arg.starts_with("--files-from=")
+        )) {{
+            continue;
+        }}
+        if (!end_options && arg.starts_with("--")) {{
+            continue;
+        }}
+        if (!end_options && arg.starts_with("-") && arg.size() > 1) {{
+            for (size_t j = 1; j < arg.size(); j++) {{
+                char opt = arg[j];
+                if (opt == 'c') {{
+                    create = true;
+                    continue;
+                }}
+                if (opt == 'f') {{
+                    if (j + 1 < arg.size()) {{
+                        archive = arg.substr(j + 1);
+                    }} else {{
+                        if (i + 1 >= argv.size()) return -1;
+                        archive = argv[++i];
+                    }}
+                    break;
+                }}
+                if (opt == 'C') {{
+                    if (j + 1 < arg.size()) {{
+                        set_directory(arg.substr(j + 1));
+                    }} else {{
+                        if (i + 1 >= argv.size()) return -1;
+                        set_directory(argv[++i]);
+                    }}
+                    break;
+                }}
+                if (opt == 'T' || opt == 'X' || opt == 'I') {{
+                    if (j + 1 >= arg.size()) {{
+                        if (i + 1 >= argv.size()) return -1;
+                        i++;
+                    }}
+                    break;
+                }}
+            }}
+            continue;
+        }}
+        if (!end_options && i == 1) {{
+            for (size_t j = 0; j < arg.size(); j++) {{
+                char opt = arg[j];
+                if (opt == 'c') {{
+                    create = true;
+                    continue;
+                }}
+                if (opt == 'f') {{
+                    if (i + 1 >= argv.size()) return -1;
+                    archive = argv[++i];
+                    break;
+                }}
+                if (opt == 'C') {{
+                    if (i + 1 >= argv.size()) return -1;
+                    set_directory(argv[++i]);
+                    break;
+                }}
+            }}
+            continue;
+        }}
+        inputs.push_back(arg);
+        input_directories.push_back(current_directory);
+    }}
+
+    if (!create || !archive.has_value() || inputs.empty()) {{
         return -1;
     }}
 
-    const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return -1;
-
-    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
-    if (!absolute_path.has_value()) {{
+    auto archive_path = get_execve_path(event.pid, *archive);
+    if (!archive_path.has_value()) {{
         return -1;
     }}
-
-    if ({allow_cond}) {{
-        return -1;
+    if (!({archive_allow})) {{
+        return static_cast<int>(state.current_state_index + 1);
     }}
 
-    if (!({deny_cond})) {{
-        return -1;
+    for (size_t i = 0; i < inputs.size(); i++) {{
+        std::optional<std::string> input_path;
+        if (inputs[i].starts_with("/") || !input_directories[i].has_value()) {{
+            input_path = get_execve_path(event.pid, inputs[i]);
+        }} else {{
+            auto directory_path = get_execve_path(event.pid, *input_directories[i]);
+            if (!directory_path.has_value()) {{
+                return -1;
+            }}
+            input_path = get_execve_path(event.pid, *directory_path + "/" + inputs[i]);
+        }}
+        if (!input_path.has_value()) {{
+            return -1;
+        }}
+        if (!({input_allow})) {{
+            return static_cast<int>(state.current_state_index + 1);
+        }}
     }}
 
-    static std::unordered_map<pid_t, long> counts;
-    long& count = counts[event.pid];
-    count += 1;
-
-    if (count < {threshold}) {{
-        return -1;
-    }}
-
-    count = 0;
-    return static_cast<int>(state.current_state_index + 1);
+    return -1;
 }}
 """
 
@@ -1806,6 +2101,24 @@ if __name__ == "__main__":
             is_func_body += "\n"
             rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
             continue
+
+        if rule.get("type") == "cp_path_policy":
+            function_names = [f"step_{name}_0"]
+            is_func_body += gen_cp_path_policy(function_names[0], rule)
+            is_func_body += "\n"
+            rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
+            continue
+
+        if rule.get("type") == "zip_path_policy":
+            function_names = [f"step_{name}_0"]
+            is_func_body += gen_zip_path_policy(function_names[0], rule)
+            is_func_body += "\n"
+            rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
+            continue
+
+        if rule.get("type") == "tar_path_policy":
+            function_names = [f"step_{name}_0"]
+            is_func_body += gen_tar_path_policy(function_names[0], rule)
             is_func_body += "\n"
             rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
             continue
