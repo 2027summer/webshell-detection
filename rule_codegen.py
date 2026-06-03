@@ -1441,6 +1441,65 @@ def gen_path_openat_count(function_name: str, rule: dict):
 """
 
 
+def gen_transition(function_name: str, t: dict):
+    syscall = t["syscall"]
+    if isinstance(syscall, list):
+        body = ""
+        function_names = []
+        for s in syscall:
+            assert(isinstance(s, str))
+            sub_function_name = f"{function_name}_{s}"
+            sub_t = dict(t)
+            sub_t["syscall"] = s
+            body += gen_transition(sub_function_name, sub_t)
+            body += "\n"
+            function_names.append(sub_function_name)
+
+        body += f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    int ret = -1;
+"""
+        for sub_function_name in function_names:
+            body += f"""    ret = {sub_function_name}(ctx, state, event);
+    if (ret >= 0) {{
+        return ret;
+    }}
+"""
+        body += "    return -1;\n"
+        body += "}\n"
+        return body
+
+    if syscall == "execve":
+        return gen_execve(function_name, t)
+    if syscall == "execveat":
+        return gen_execve(function_name, t)
+    if syscall == "openat":
+        return gen_openat(function_name, t)
+    if syscall == "connect":
+        return gen_connect(function_name, t)
+    if syscall == "unlinkat":
+        return gen_unlinkat(function_name, t)
+    if syscall == "rename":
+        return gen_rename(function_name, t)
+    if syscall == "renameat":
+        return gen_renameat(function_name, t)
+    if syscall == "renameat2":
+        return gen_renameat2(function_name, t)
+    if syscall == "chmod":
+        return gen_chmod(function_name, t)
+    if syscall == "fchmodat":
+        return gen_fchmodat(function_name, t)
+    if syscall == "truncate":
+        return gen_truncate(function_name, t)
+    if syscall == "ftruncate":
+        return gen_ftruncate(function_name, t)
+    if syscall == "linkat":
+        return gen_linkat(function_name, t)
+    if syscall == "symlinkat":
+        return gen_symlinkat(function_name, t)
+
+    assert(False)
+
+
 def gen_rule_def(name: str, timeout: int, function_names: list[str]):
     functions = ",\n        ".join([
         f"detection_rules::{f_name}" for f_name in function_names 
@@ -1525,45 +1584,8 @@ if __name__ == "__main__":
             function_name = f"step_{name}_{i}"
             function_names.append(function_name)
 
-            if t["syscall"] == "execve":
-                is_func_body += gen_execve(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "openat":
-                is_func_body += gen_openat(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "connect":
-                is_func_body += gen_connect(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "unlinkat":
-                is_func_body += gen_unlinkat(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "rename":
-                is_func_body += gen_rename(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "renameat":
-                is_func_body += gen_renameat(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "renameat2":
-                is_func_body += gen_renameat2(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "chmod":
-                is_func_body += gen_chmod(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "fchmodat":
-                is_func_body += gen_fchmodat(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "truncate":
-                is_func_body += gen_truncate(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "ftruncate":
-                is_func_body += gen_ftruncate(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "linkat":
-                is_func_body += gen_linkat(function_name, t)
-                is_func_body += "\n"
-            elif t["syscall"] == "symlinkat":
-                is_func_body += gen_symlinkat(function_name, t)
-                is_func_body += "\n"
+            is_func_body += gen_transition(function_name, t)
+            is_func_body += "\n"
         
         rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
 
