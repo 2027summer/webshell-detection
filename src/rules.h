@@ -22,16 +22,6 @@ int step_builtin_recursive_traversal_2(Context& ctx, engine::DetectionState& sta
 #include "codegen_rules.h"
 #else
 namespace detection_rules {
-inline const long recursive_traversal_threshold = 0L;
-
-inline bool is_recursive_traversal_allow_path(const std::optional<std::string>&, pid_t) {
-    return false;
-}
-
-inline bool is_recursive_traversal_deny_path(const std::optional<std::string>&, pid_t) {
-    return true;
-}
-
 inline void register_codegen_rules(engine::Engine&) {}
 }
 #endif
@@ -40,228 +30,228 @@ namespace detection_rules {
 
 using namespace engine;
 
-inline void register_codegen_rules(engine::Engine& engine);
-
-static const char* execve_deny[] = {
-    "/usr/bin/ls"
-};
-
-static const char* openat_deny[] = {
-    "/tmp/"
-};
-
-static const char* openat_allow[] = {
-    "/tmp/abcdefgh"
-};
-
-inline int step_execve_bin_sh_cat_flag(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_execve) {
-        return -1;
-    }
-
-    const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return -1;
 
 
-    if (args->filename != "/bin/sh") {
-        return -1;
-    }
+// static const char* execve_deny[] = {
+//     "/usr/bin/ls"
+// };
 
-    if (args->argv.size() < 3) {
-        return -1;
-    }
+// static const char* openat_deny[] = {
+//     "/tmp/"
+// };
 
-    if (args->argv[0] != "/bin/sh") {
-        return -1;
-    }
+// static const char* openat_allow[] = {
+//     "/tmp/abcdefgh"
+// };
 
-    if (args->argv[1] != "-c") {
-        return -1;
-    }
+// inline int step_execve_bin_sh_cat_flag(Context& ctx, DetectionState& state, const SyscallEvent& event) {
+//     if (event.syscall_index != SYS_execve) {
+//         return -1;
+//     }
 
-    if (args->argv[2] != "cat flag.txt") {
-        return -1;
-    }
-
-    fprintf(stderr, "is_execve_bin_sh_cat_flag=true\n");
-
-    return static_cast<int>(state.current_state_index + 1);
-}
-
-inline int step_openat_flag(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_openat) {
-        return -1;
-    }
-
-    const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return -1;
-
-    if (args->dirfd != AT_FDCWD) {
-        return -1;
-    }
-
-    if (args->pathname != "flag.txt") {
-        return -1;
-    }
+//     const auto* args = std::get_if<ExecveData>(&event.args);
+//     if (!args) return -1;
 
 
-    fprintf(stderr, "is_openat_flag=true\n");
+//     if (args->filename != "/bin/sh") {
+//         return -1;
+//     }
 
-    return static_cast<int>(state.current_state_index + 1);
-}
+//     if (args->argv.size() < 3) {
+//         return -1;
+//     }
 
-inline int step_execve_cat(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_execve) {
-        return -1;
-    }
+//     if (args->argv[0] != "/bin/sh") {
+//         return -1;
+//     }
 
-    const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return -1;
+//     if (args->argv[1] != "-c") {
+//         return -1;
+//     }
 
-    if (args->filename != "/usr/bin/cat") {
-        return -1;
-    }
-    if (args->argv.size() < 1) {
-        return -1;
-    }
-    if (args->argv[0] != "cat") {
-        return -1;
-    }
+//     if (args->argv[2] != "cat flag.txt") {
+//         return -1;
+//     }
 
-    fprintf(stderr, "is_execve_cat=true\n");
+//     fprintf(stderr, "is_execve_bin_sh_cat_flag=true\n");
 
-    return static_cast<int>(state.current_state_index + 1);
-}
+//     return static_cast<int>(state.current_state_index + 1);
+// }
 
-inline int step_openat_deny(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_openat) {
-        return -1;
-    }
+// inline int step_openat_flag(Context& ctx, DetectionState& state, const SyscallEvent& event) {
+//     if (event.syscall_index != SYS_openat) {
+//         return -1;
+//     }
 
-    const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return -1;
+//     const auto* args = std::get_if<OpenAtData>(&event.args);
+//     if (!args) return -1;
 
-    if (args->dirfd != AT_FDCWD) {
-        return -1;
-    }
+//     if (args->dirfd != AT_FDCWD) {
+//         return -1;
+//     }
 
-    auto absolute_path = get_absolute_path(event.pid, args->pathname);
+//     if (args->pathname != "flag.txt") {
+//         return -1;
+//     }
 
-    if (!absolute_path.has_value()) {
-        return -1;
-    }
 
-    fprintf(stderr, "[DEBUG] path: %s\n", absolute_path->c_str());
+//     fprintf(stderr, "is_openat_flag=true\n");
 
-    for (size_t i = 0; i < sizeof(openat_allow) / sizeof(char *); i++) {
-        std::string allow_path = std::string(openat_allow[i]);
-        if (allow_path.back() == '/') {
-            if (absolute_path->starts_with(allow_path)) {
-                return -1;
-            }
-        } else {
-            if (absolute_path == allow_path) {
-                return -1;
-            }
-        }
-    }
+//     return static_cast<int>(state.current_state_index + 1);
+// }
 
-    for (size_t i = 0; i < sizeof(openat_deny) / sizeof(char *); i++) {
-        std::string deny_path = std::string(openat_deny[i]);
-        if (deny_path.back() == '/') {
-            if (absolute_path->starts_with(deny_path)) {
-                return static_cast<int>(state.current_state_index + 1);
-            }
-        } else {
-            if (absolute_path == deny_path) {
-                return static_cast<int>(state.current_state_index + 1);
-            }
-        }
-    }
+// inline int step_execve_cat(Context& ctx, DetectionState& state, const SyscallEvent& event) {
+//     if (event.syscall_index != SYS_execve) {
+//         return -1;
+//     }
 
-    return -1;
-}
+//     const auto* args = std::get_if<ExecveData>(&event.args);
+//     if (!args) return -1;
 
-inline int step_execve_deny(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_execve) {
-        return -1;
-    }
+//     if (args->filename != "/usr/bin/cat") {
+//         return -1;
+//     }
+//     if (args->argv.size() < 1) {
+//         return -1;
+//     }
+//     if (args->argv[0] != "cat") {
+//         return -1;
+//     }
 
-    const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return -1;
+//     fprintf(stderr, "is_execve_cat=true\n");
 
-    auto absolute_path = get_absolute_path(event.pid, args->filename);
+//     return static_cast<int>(state.current_state_index + 1);
+// }
 
-    if (!absolute_path.has_value()) {
-        return -1;
-    }
+// inline int step_openat_deny(Context& ctx, DetectionState& state, const SyscallEvent& event) {
+//     if (event.syscall_index != SYS_openat) {
+//         return -1;
+//     }
 
-    for (size_t i = 0; i < sizeof(execve_deny) / sizeof(char *); i++) {
-        std::string deny_path = std::string(execve_deny[i]);
-        if (deny_path.back() == '/') {
-            if (absolute_path->starts_with(deny_path)) {
-                return static_cast<int>(state.current_state_index + 1);
-            }
-        } else {
-            if (absolute_path == deny_path) {
-                return static_cast<int>(state.current_state_index + 1);
-            }
-        }
-    }
+//     const auto* args = std::get_if<OpenAtData>(&event.args);
+//     if (!args) return -1;
 
-    return -1;
-}
+//     if (args->dirfd != AT_FDCWD) {
+//         return -1;
+//     }
 
-inline int step_bin_sh_echo_inject_1(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_dup2) {
-        return -1;
-    }
+//     auto absolute_path = get_absolute_path(event.pid, args->pathname);
 
-    const auto* args = std::get_if<Dup2Data>(&event.args);
-    if (!args) return -1;
+//     if (!absolute_path.has_value()) {
+//         return -1;
+//     }
 
-    if (static_cast<long>(args->newfd) != 1) {
-        return -1;
-    }
+//     fprintf(stderr, "[DEBUG] path: %s\n", absolute_path->c_str());
 
-    return static_cast<int>(state.current_state_index + 1);
-}
+//     for (size_t i = 0; i < sizeof(openat_allow) / sizeof(char *); i++) {
+//         std::string allow_path = std::string(openat_allow[i]);
+//         if (allow_path.back() == '/') {
+//             if (absolute_path->starts_with(allow_path)) {
+//                 return -1;
+//             }
+//         } else {
+//             if (absolute_path == allow_path) {
+//                 return -1;
+//             }
+//         }
+//     }
 
-inline int step_bin_sh_echo_inject_2(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_write) {
-        return -1;
-    }
+//     for (size_t i = 0; i < sizeof(openat_deny) / sizeof(char *); i++) {
+//         std::string deny_path = std::string(openat_deny[i]);
+//         if (deny_path.back() == '/') {
+//             if (absolute_path->starts_with(deny_path)) {
+//                 return static_cast<int>(state.current_state_index + 1);
+//             }
+//         } else {
+//             if (absolute_path == deny_path) {
+//                 return static_cast<int>(state.current_state_index + 1);
+//             }
+//         }
+//     }
 
-    if (event.from_shell == false) {
-        return -1;
-    }
+//     return -1;
+// }
 
-    const auto* args = std::get_if<WriteData>(&event.args);
-    if (!args) return -1;
+// inline int step_execve_deny(Context& ctx, DetectionState& state, const SyscallEvent& event) {
+//     if (event.syscall_index != SYS_execve) {
+//         return -1;
+//     }
 
-    if (args->fd != 1) {
-        return -1;
-    }
+//     const auto* args = std::get_if<ExecveData>(&event.args);
+//     if (!args) return -1;
 
-    if (args->data.size() < 4) {
-        return -1;
-    }
+//     auto absolute_path = get_absolute_path(event.pid, args->filename);
 
-    if (args->data[0] != 0x7F) {
-        return -1;
-    }
-    if (args->data[1] != 0x45) { // E
-        return -1;
-    }
-    if (args->data[2] != 0x4C) { // L
-        return -1;
-    }
-    if (args->data[3] != 0x46) { // F
-        return -1;
-    }
+//     if (!absolute_path.has_value()) {
+//         return -1;
+//     }
 
-    return static_cast<int>(state.current_state_index + 1);
-}
+//     for (size_t i = 0; i < sizeof(execve_deny) / sizeof(char *); i++) {
+//         std::string deny_path = std::string(execve_deny[i]);
+//         if (deny_path.back() == '/') {
+//             if (absolute_path->starts_with(deny_path)) {
+//                 return static_cast<int>(state.current_state_index + 1);
+//             }
+//         } else {
+//             if (absolute_path == deny_path) {
+//                 return static_cast<int>(state.current_state_index + 1);
+//             }
+//         }
+//     }
+
+//     return -1;
+// }
+
+// inline int step_bin_sh_echo_inject_1(Context& ctx, DetectionState& state, const SyscallEvent& event) {
+//     if (event.syscall_index != SYS_dup2) {
+//         return -1;
+//     }
+
+//     const auto* args = std::get_if<Dup2Data>(&event.args);
+//     if (!args) return -1;
+
+//     if (static_cast<long>(args->newfd) != 1) {
+//         return -1;
+//     }
+
+//     return static_cast<int>(state.current_state_index + 1);
+// }
+
+// inline int step_bin_sh_echo_inject_2(Context& ctx, DetectionState& state, const SyscallEvent& event) {
+//     if (event.syscall_index != SYS_write) {
+//         return -1;
+//     }
+
+//     if (event.from_shell == false) {
+//         return -1;
+//     }
+
+//     const auto* args = std::get_if<WriteData>(&event.args);
+//     if (!args) return -1;
+
+//     if (args->fd != 1) {
+//         return -1;
+//     }
+
+//     if (args->data.size() < 4) {
+//         return -1;
+//     }
+
+//     if (args->data[0] != 0x7F) {
+//         return -1;
+//     }
+//     if (args->data[1] != 0x45) { // E
+//         return -1;
+//     }
+//     if (args->data[2] != 0x4C) { // L
+//         return -1;
+//     }
+//     if (args->data[3] != 0x46) { // F
+//         return -1;
+//     }
+
+//     return static_cast<int>(state.current_state_index + 1);
+// }
 
 inline bool is_db_file_path(const std::string& path) {
     return path.ends_with(".db") ||
@@ -341,108 +331,6 @@ inline bool on_detect_db_read_large(DetectionState& state) {
     }
 
     return true;
-}
-
-inline int step_recursive_traversal_1(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_openat) {
-        return -1;
-    }
-
-    if (!event.retval.has_value() || *event.retval < 0) {
-        return -1;
-    }
-
-    const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return -1;
-
-    if (!((args->flags & O_DIRECTORY) == O_DIRECTORY)) {
-        return -1;
-    }
-
-    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
-
-    if (!absolute_path.has_value()) {
-        return -1;
-    }
-
-    if (is_recursive_traversal_allow_path(absolute_path, event.pid)) {
-        return -1;
-    }
-
-    if (!is_recursive_traversal_deny_path(absolute_path, event.pid)) {
-        return -1;
-    }
-
-    if (state.captured.size() == 0) {
-        if (!absolute_path->ends_with("/")) {
-            absolute_path->push_back('/');
-        }
-        state.captured.push_back(*absolute_path);
-        state.captured.push_back(0L);
-        state.captured.push_back(*event.retval);
-        return 1;
-    }
-
-    if (state.captured.size() != 3) {
-        return -1;
-    }
-
-    auto root = std::get_if<std::string>(&state.captured[0]);
-    auto fd = std::get_if<long>(&state.captured[2]);
-    if (!root || !fd) {
-        return -1;
-    }
-
-    if (!is_path_in(absolute_path, event.pid, *root)) {
-        return -1;
-    }
-
-    *fd = *event.retval;
-    return 1;
-}
-
-inline int step_recursive_traversal_2(Context& ctx, DetectionState& state, const SyscallEvent& event) {
-    if (event.syscall_index != SYS_getdents64) {
-        return -1;
-    }
-
-    if (!event.retval.has_value()) {
-        return -1;
-    }
-
-    const auto* args = std::get_if<Getdents64Data>(&event.args);
-    if (!args) return -1;
-
-    if (state.captured.size() != 3) {
-        return -1;
-    }
-
-    auto expected_fd = std::get_if<long>(&state.captured[2]);
-    if (!expected_fd) {
-        return -1;
-    }
-
-    if (static_cast<long>(args->fd) != *expected_fd) {
-        return -1;
-    }
-
-    if (*event.retval < 0) {
-        return 0;
-    }
-
-    auto count = std::get_if<long>(&state.captured[1]);
-    if (!count) {
-        return -1;
-    }
-
-    *count += 1;
-
-    if (*count < recursive_traversal_threshold) {
-        return 0;
-    }
-    const auto *s = std::get_if<std::string>(&state.captured[0]);
-    fprintf(stderr, "FILENAME: %s\n", (*s).c_str());
-    return 2;
 }
 
 
