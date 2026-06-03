@@ -22,6 +22,21 @@ def expand_home_path(path: str):
 
 
 def gen_string_match_cond(value: str, condition: dict, absolute_path: str, pid: str = "event.pid"):
+    if "all" in condition:
+        conditions = condition["all"]
+        assert(isinstance(conditions, list) and len(conditions) > 0)
+        l = []
+        for cond in conditions:
+            l.append(gen_string_match_cond(value, cond, absolute_path, pid))
+        return "(" + " && ".join(l) + ")"
+    if "any" in condition:
+        conditions = condition["any"]
+        assert(isinstance(conditions, list) and len(conditions) > 0)
+        l = []
+        for cond in conditions:
+            l.append(gen_string_match_cond(value, cond, absolute_path, pid))
+        return "(" + " || ".join(l) + ")"
+
     assert(len(condition) == 1)
     if "eq" in condition:
         return f"{value} == \"{condition['eq']}\""
@@ -40,8 +55,55 @@ def gen_string_match_cond(value: str, condition: dict, absolute_path: str, pid: 
     assert(False)
 
 
+def gen_destination_match_cond(condition: dict, value: str = "args"):
+    if "all" in condition:
+        conditions = condition["all"]
+        assert(isinstance(conditions, list) and len(conditions) > 0)
+        l = []
+        for cond in conditions:
+            l.append(gen_destination_match_cond(cond, value))
+        return "(" + " && ".join(l) + ")"
+    if "any" in condition:
+        conditions = condition["any"]
+        assert(isinstance(conditions, list) and len(conditions) > 0)
+        l = []
+        for cond in conditions:
+            l.append(gen_destination_match_cond(cond, value))
+        return "(" + " || ".join(l) + ")"
+
+    exprs = []
+    for key, v in condition.items():
+        if key == "addr":
+            exprs.append(f"{value}->addr == \"{v}\"")
+        elif key == "addr_starts_with":
+            exprs.append(f"{value}->addr.starts_with(\"{v}\")")
+        elif key == "port":
+            assert(isinstance(v, int))
+            exprs.append(f"{value}->port == {v}")
+        elif key == "family":
+            assert(isinstance(v, int) or isinstance(v, str))
+            exprs.append(f"{value}->family == {v}")
+        else:
+            assert(False)
+
+    assert(len(exprs) > 0)
+    return "(" + " && ".join(exprs) + ")"
+
+
+def condition_has_key(condition: dict, key: str):
+    if key in condition:
+        return True
+    for nested_key in ["all", "any"]:
+        if nested_key in condition:
+            for cond in condition[nested_key]:
+                if condition_has_key(cond, key):
+                    return True
+    return False
+
 codegen_rules_h_template = f"""#include <fcntl.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
+#include <unordered_map>
 #include "engine.h"
 #include "helpers.h"
 
@@ -80,8 +142,11 @@ inline void register_codegen_rules(engine::Engine& engine) {{
 
 
 def gen_execve(function_name: str, t: dict):
-    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
-    if (event.syscall_index != SYS_execve) {{
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
         return -1;
     }}
 
@@ -104,7 +169,7 @@ def gen_execve(function_name: str, t: dict):
         deny_conds = check_list.get("deny", [])
         assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
-        if any("path_in" in cond for cond in allow_conds + deny_conds):
+        if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             body += "    auto filename_path = get_absolute_path(event.pid, args->filename);\n"
             body += "\n"
 
@@ -151,7 +216,7 @@ def gen_execve(function_name: str, t: dict):
 
             arg = f"args->argv[{index}]"
             absolute_path = f"argv_{index}_path"
-            if any("path_in" in condition for condition in conditions):
+            if any(condition_has_key(condition, "path_in") for condition in conditions):
                 body += f"    auto {absolute_path} = get_absolute_path(event.pid, {arg});\n"
                 body += "\n"
 
@@ -239,19 +304,35 @@ def gen_execve(function_name: str, t: dict):
     return body
 
 def gen_openat(function_name: str, t: dict):
-    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
         return -1;
     }}
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
     if (!args) return -1;
+    if (!event.retval.has_value() || *event.retval < 0) {{
+        return -1;
+    }}
 """
 
     if "dirfd" in t:
         body += f"""    if (args->dirfd != {t["dirfd"]}) {{
         return -1;
     }}
+"""
+
+    if "relative" in t:
+        assert(isinstance(t["relative"], bool))
+        if t["relative"]:
+            body += """    if (args->pathname.starts_with("/")) {
+        return -1;
+    }
+"""
+        else:
+            body += """    if (!args->pathname.starts_with("/")) {
+        return -1;
+    }
 """
 
     if "pathname" in t:
@@ -268,25 +349,20 @@ def gen_openat(function_name: str, t: dict):
         deny_conds = check_list.get("deny", [])
         assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
-        if any("path_in" in cond for cond in allow_conds + deny_conds):
-            # 아직 AT_FDCWD 만 허용
-            if "dirfd" in t and str(t["dirfd"]) != "AT_FDCWD":
-                assert(False)
-            if "dirfd" not in t:
-                body += """    if (args->dirfd != AT_FDCWD) {
+        body += """    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
+    if (!absolute_path.has_value()) {
         return -1;
     }
 """
-            body += "    auto absolute_path = get_absolute_path(event.pid, args->pathname);\n"
-            body += "\n"
+        body += "\n"
 
         allow_exprs = []
         for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("args->pathname", cond, "absolute_path"))
+            allow_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path"))
 
         deny_exprs = []
         for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("args->pathname", cond, "absolute_path"))
+            deny_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path"))
 
         cond_allow = " || ".join(allow_exprs)
         cond_deny = " || ".join(deny_exprs)
@@ -303,7 +379,27 @@ def gen_openat(function_name: str, t: dict):
             body += f"    if (!({cond_deny})) {{\n"
             body += f"        return -1;\n"
             body += f"    }}\n"
-    
+
+    if "access_mode" in t:
+        access_mode = t["access_mode"]
+        assert(access_mode == "read" or access_mode == "write" or access_mode == "readonly")
+        if access_mode == "read":
+            body += """    if ((args->flags & O_ACCMODE) == O_WRONLY) {
+        return -1;
+    }
+"""
+        elif access_mode == "write":
+            body += """    int access_mode = args->flags & O_ACCMODE;
+    if (access_mode != O_WRONLY && access_mode != O_RDWR) {
+        return -1;
+    }
+"""
+        else:
+            body += """    if ((args->flags & O_ACCMODE) != O_RDONLY) {
+        return -1;
+    }
+"""
+
     if "flags" in t:
         flags = t["flags"] # expected: ["O_RDONLY", "...", ...]
         # if "O_RDONLY" in flags:
@@ -318,9 +414,70 @@ def gen_openat(function_name: str, t: dict):
 
     return body
 
+
+def gen_connect(function_name: str, t: dict):
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_connect) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<ConnectData>(&event.args);
+    if (!args) return -1;
+"""
+
+    if "destination" in t:
+        check_list = t["destination"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_destination_match_cond(cond))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_destination_match_cond(cond))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(deny_conds) > 0:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
+    body += "}\n"
+
+    return body
+
 def gen_unlinkat(function_name: str, t: dict):
-    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_unlinkat) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
         return -1;
     }}
 
@@ -348,15 +505,11 @@ def gen_unlinkat(function_name: str, t: dict):
         deny_conds = check_list.get("deny", [])
         assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
-        if any("path_in" in cond for cond in allow_conds + deny_conds):
-            if "dfd" in t and str(t["dfd"]) != "AT_FDCWD":
-                assert(False)
-            if "dfd" not in t:
-                body += """    if (args->dfd != AT_FDCWD) {
-        return -1;
-    }
-"""
-            body += "    auto absolute_path = get_absolute_path(event.pid, args->pathname);\n"
+        if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
+            body += "    auto absolute_path = get_absolute_path_at(event.pid, args->dfd, args->pathname);\n"
+            body += "    if (!absolute_path.has_value()) {\n"
+            body += "        return -1;\n"
+            body += "    }\n"
             body += "\n"
 
         allow_exprs = []
@@ -389,8 +542,12 @@ def gen_unlinkat(function_name: str, t: dict):
     return body
 
 def gen_renameat2(function_name: str, t: dict):
-    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_renameat2) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
         return -1;
     }}
 
@@ -412,8 +569,8 @@ def gen_renameat2(function_name: str, t: dict):
         deny_conds = oldname_rule.get("deny", [])
         assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
-        if any("path_in" in cond for cond in allow_conds + deny_conds):
-            body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
+        if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
+            body += "    auto oldname_path = get_absolute_path_at(event.pid, args->oldfd, args->oldname);\n"
             body += "\n"
 
         allow_exprs = []
@@ -440,13 +597,575 @@ def gen_renameat2(function_name: str, t: dict):
             body += f"        return -1;\n"
             body += f"    }}\n"
 
+    if "newname" in t:
+        newname_rule = t["newname"]
+        assert(isinstance(newname_rule, dict))
+
+        has_allow = "allow" in newname_rule
+        has_deny = "deny" in newname_rule
+        assert(has_allow or has_deny)
+        for key in newname_rule.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = newname_rule.get("allow", [])
+        deny_conds = newname_rule.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
+        body += "    if (!newname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
+    body += "}\n"
+
+    return body
+
+
+def gen_rename(function_name: str, t: dict):
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_rename) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<RenameData>(&event.args);
+    if (!args) return -1;
+"""
+
+    if "oldname" in t:
+        check_list = t["oldname"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
+        body += "    if (!oldname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*oldname_path)", cond, "oldname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*oldname_path)", cond, "oldname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    if "newname" in t:
+        check_list = t["newname"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto newname_path = get_absolute_path(event.pid, args->newname);\n"
+        body += "    if (!newname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
+    body += "}\n"
+
+    return body
+
+
+def gen_renameat(function_name: str, t: dict):
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_renameat) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<RenameAtData>(&event.args);
+    if (!args) return -1;
+"""
+
+    if "oldfd" in t:
+        body += f"""    if (args->oldfd != {t["oldfd"]}) {{
+        return -1;
+    }}
+"""
+
+    if "newfd" in t:
+        body += f"""    if (args->newfd != {t["newfd"]}) {{
+        return -1;
+    }}
+"""
+
+    if "oldname" in t:
+        check_list = t["oldname"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto oldname_path = get_absolute_path_at(event.pid, args->oldfd, args->oldname);\n"
+        body += "    if (!oldname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*oldname_path)", cond, "oldname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*oldname_path)", cond, "oldname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    if "newname" in t:
+        check_list = t["newname"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
+        body += "    if (!newname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*newname_path)", cond, "newname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
+    body += "}\n"
+
+    return body
+
+
+def gen_chmod(function_name: str, t: dict):
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_chmod) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<ChmodData>(&event.args);
+    if (!args) return -1;
+"""
+
+    if "pathname" in t:
+        check_list = t["pathname"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto pathname_path = get_absolute_path(event.pid, args->pathname);\n"
+        body += "    if (!pathname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    if "mode_any" in t:
+        mode_any = t["mode_any"]
+        assert(mode_any == "execute")
+        body += """    if ((args->mode & 0111) == 0) {
+        return -1;
+    }
+"""
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
+    body += "}\n"
+
+    return body
+
+
+def gen_fchmodat(function_name: str, t: dict):
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_fchmodat) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<FchmodAtData>(&event.args);
+    if (!args) return -1;
+"""
+
+    if "dfd" in t:
+        body += f"""    if (args->dfd != {t["dfd"]}) {{
+        return -1;
+    }}
+"""
+
+    if "pathname" in t:
+        check_list = t["pathname"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto pathname_path = get_absolute_path_at(event.pid, args->dfd, args->pathname);\n"
+        body += "    if (!pathname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    if "mode_any" in t:
+        mode_any = t["mode_any"]
+        assert(mode_any == "execute")
+        body += """    if ((args->mode & 0111) == 0) {
+        return -1;
+    }
+"""
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
+    body += "}\n"
+
+    return body
+
+
+def gen_truncate(function_name: str, t: dict):
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_truncate) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<TruncateData>(&event.args);
+    if (!args) return -1;
+"""
+
+    if "pathname" in t:
+        check_list = t["pathname"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto pathname_path = get_absolute_path(event.pid, args->pathname);\n"
+        body += "    if (!pathname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    if "length" in t:
+        body += f"""    if (args->length != {t["length"]}L) {{
+        return -1;
+    }}
+"""
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
+    body += "}\n"
+
+    return body
+
+
+def gen_ftruncate(function_name: str, t: dict):
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_ftruncate) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<FtruncateData>(&event.args);
+    if (!args) return -1;
+"""
+
+    if "pathname" in t:
+        check_list = t["pathname"]
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        body += "    auto pathname_path = get_fd_path(event.pid, args->fd);\n"
+        body += "    if (!pathname_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond("(*pathname_path)", cond, "pathname_path"))
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"    if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        elif len(allow_conds) > 0:
+            body += f"    if ({cond_allow}) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+        else:
+            body += f"    if (!({cond_deny})) {{\n"
+            body += f"        return -1;\n"
+            body += f"    }}\n"
+
+    if "length" in t:
+        body += f"""    if (args->length != {t["length"]}L) {{
+        return -1;
+    }}
+"""
+
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_linkat(function_name: str, t: dict):
-    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_linkat) {{
         return -1;
     }}
@@ -475,7 +1194,7 @@ def gen_linkat(function_name: str, t: dict):
         deny_conds = check_list.get("deny", [])
         assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
-        if any("path_in" in cond for cond in allow_conds + deny_conds):
+        if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             if "oldfd" in t and str(t["oldfd"]) != "AT_FDCWD":
                 assert(False)
             if "oldfd" not in t:
@@ -516,7 +1235,7 @@ def gen_linkat(function_name: str, t: dict):
     return body
 
 def gen_symlinkat(function_name: str, t: dict):
-    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_symlinkat) {{
         return -1;
     }}
@@ -545,7 +1264,7 @@ def gen_symlinkat(function_name: str, t: dict):
         deny_conds = check_list.get("deny", [])
         assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
-        if any("path_in" in cond for cond in allow_conds + deny_conds):
+        if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             if "newdfd" in t and str(t["newdfd"]) != "AT_FDCWD":
                 assert(False)
 
@@ -679,7 +1398,7 @@ def gen_path_openat_count(function_name: str, rule: dict):
     if len(deny_exprs) > 0:
         deny_cond = " || ".join(deny_exprs)
 
-    return f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    return f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
         return -1;
     }}
@@ -808,11 +1527,32 @@ if __name__ == "__main__":
             elif t["syscall"] == "openat":
                 is_func_body += gen_openat(function_name, t)
                 is_func_body += "\n"
+            elif t["syscall"] == "connect":
+                is_func_body += gen_connect(function_name, t)
+                is_func_body += "\n"
             elif t["syscall"] == "unlinkat":
                 is_func_body += gen_unlinkat(function_name, t)
                 is_func_body += "\n"
+            elif t["syscall"] == "rename":
+                is_func_body += gen_rename(function_name, t)
+                is_func_body += "\n"
+            elif t["syscall"] == "renameat":
+                is_func_body += gen_renameat(function_name, t)
+                is_func_body += "\n"
             elif t["syscall"] == "renameat2":
                 is_func_body += gen_renameat2(function_name, t)
+                is_func_body += "\n"
+            elif t["syscall"] == "chmod":
+                is_func_body += gen_chmod(function_name, t)
+                is_func_body += "\n"
+            elif t["syscall"] == "fchmodat":
+                is_func_body += gen_fchmodat(function_name, t)
+                is_func_body += "\n"
+            elif t["syscall"] == "truncate":
+                is_func_body += gen_truncate(function_name, t)
+                is_func_body += "\n"
+            elif t["syscall"] == "ftruncate":
+                is_func_body += gen_ftruncate(function_name, t)
                 is_func_body += "\n"
             elif t["syscall"] == "linkat":
                 is_func_body += gen_linkat(function_name, t)

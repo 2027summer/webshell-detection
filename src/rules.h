@@ -13,8 +13,9 @@
 #include "rule.h"
 
 namespace detection_rules {
-int step_recursive_traversal_1(engine::DetectionState& state, const engine::SyscallEvent& event);
-int step_recursive_traversal_2(engine::DetectionState& state, const engine::SyscallEvent& event);
+using namespace engine;
+int step_builtin_recursive_traversal_1(Context& ctx, engine::DetectionState& state, const engine::SyscallEvent& event);
+int step_builtin_recursive_traversal_2(Context& ctx, engine::DetectionState& state, const engine::SyscallEvent& event);
 }
 
 #if __has_include("codegen_rules.h")
