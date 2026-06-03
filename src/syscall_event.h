@@ -12,6 +12,7 @@ struct OpenAtData {
     std::string pathname;
     int flags;
     int mode;
+    bool existed_before;
 };
 
 struct WriteData {

@@ -3,6 +3,8 @@
 #include <cstring>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <system_error>
+#include "helpers.h"
 #include "parse_syscall.h"
 #include "syscall_event.h"
 
@@ -137,11 +139,19 @@ namespace engine {
             return std::nullopt;
         }
 
+        bool existed_before = false;
+        auto absolute_path = get_absolute_path_at(pid, dirfd, *pathname);
+        if (absolute_path.has_value()) {
+            std::error_code ec;
+            existed_before = fs::exists(*absolute_path, ec);
+        }
+
         return OpenAtData {
             .dirfd = dirfd,
             .pathname = *pathname,
             .flags = flags,
-            .mode = mode
+            .mode = mode,
+            .existed_before = existed_before
         };
     }
 
