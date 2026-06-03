@@ -100,6 +100,72 @@ def condition_has_key(condition: dict, key: str):
                     return True
     return False
 
+
+def gen_env_match(function_name: str, env_rules: dict):
+    body = ""
+    for name, check_list in env_rules.items():
+        assert(isinstance(name, str))
+        assert(isinstance(check_list, dict))
+
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+        assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+        suffix = only_alnum(name)
+        value_name = f"{function_name}_{suffix}_value"
+        path_name = f"{function_name}_{suffix}_path"
+        matched_name = f"{function_name}_{suffix}_matched"
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
+
+        body += f"    auto {value_name} = get_env_value(args->envp, \"{name}\");\n"
+        body += f"    if (!{value_name}.has_value()) {{\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += f"    bool {matched_name} = false;\n"
+        body += f"    for (const auto& env_path : split_env_paths(*{value_name})) {{\n"
+        body += f"        auto {path_name} = get_env_path(event.pid, env_path);\n"
+        body += f"        if (!{path_name}.has_value()) {{\n"
+        body += "            continue;\n"
+        body += "        }\n"
+
+        cond_allow = " || ".join(allow_exprs)
+        cond_deny = " || ".join(deny_exprs)
+
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            body += f"        if (({cond_allow}) || !({cond_deny})) {{\n"
+            body += "            continue;\n"
+            body += "        }\n"
+        elif len(allow_conds) > 0:
+            body += f"        if ({cond_allow}) {{\n"
+            body += "            continue;\n"
+            body += "        }\n"
+        else:
+            body += f"        if (!({cond_deny})) {{\n"
+            body += "            continue;\n"
+            body += "        }\n"
+
+        body += f"        {matched_name} = true;\n"
+        body += "        break;\n"
+        body += "    }\n"
+        body += f"    if ({matched_name} == false) {{\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+    return body
+
+
 codegen_rules_h_template = f"""#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
@@ -111,9 +177,6 @@ namespace detection_rules {{
 
 using namespace engine;
 
-int step_recursive_traversal_1(engine::DetectionState& state, const engine::SyscallEvent& event);
-int step_recursive_traversal_2(engine::DetectionState& state, const engine::SyscallEvent& event);
-
 inline bool is_path_in(const std::optional<std::string>& absolute_path, pid_t pid, const std::string& path) {{
     if (!absolute_path.has_value()) {{
         return false;
@@ -124,13 +187,14 @@ inline bool is_path_in(const std::optional<std::string>& absolute_path, pid_t pi
         return false;
     }}
 
-    if (path.ends_with("/")) {{
-        return absolute_path->starts_with(*path_in);
+    if (*absolute_path == *path_in) {{
+        return true;
     }}
-    return *absolute_path == *path_in;
+    if (path.ends_with("/")) {{
+        return absolute_path->starts_with(*path_in) || *absolute_path + "/" == *path_in;
+    }}
+    return *absolute_path == *path_in + "/";
 }}
-
-[RECURSIVE_TRAVERSAL_CONFIG]
 
 [IS_FUNCTION_BODY]
 
@@ -143,6 +207,7 @@ inline void register_codegen_rules(engine::Engine& engine) {{
 
 def gen_execve(function_name: str, t: dict):
     body = f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_execve) {{
         return -1;
     }}
 
@@ -169,17 +234,21 @@ def gen_execve(function_name: str, t: dict):
         deny_conds = check_list.get("deny", [])
         assert(len(allow_conds) > 0 or len(deny_conds) > 0)
 
-        if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
-            body += "    auto filename_path = get_absolute_path(event.pid, args->filename);\n"
-            body += "\n"
+        body += "    auto filename_path = get_execve_path(event.pid, args->filename);\n"
+        body += "    if (!filename_path.has_value()) {\n"
+        body += "        return -1;\n"
+        body += "    }\n"
+        body += "\n"
+
+        filename = "(*filename_path)"
 
         allow_exprs = []
         for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("args->filename", cond, "filename_path"))
+            allow_exprs.append(gen_string_match_cond(filename, cond, "filename_path"))
 
         deny_exprs = []
         for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("args->filename", cond, "filename_path"))
+            deny_exprs.append(gen_string_match_cond(filename, cond, "filename_path"))
 
         cond_allow = " || ".join(allow_exprs)
         cond_deny = " || ".join(deny_exprs)
@@ -228,6 +297,11 @@ def gen_execve(function_name: str, t: dict):
             body += f"    if (!({cond})) {{\n"
             body += f"        return -1;\n"
             body += f"    }}\n"
+
+    if "env" in t and len(t["env"]) > 0:
+        env = t["env"]
+        assert(isinstance(env, dict))
+        body += gen_env_match(function_name, env)
 
     if "find_name_keywords" in t and len(t["find_name_keywords"]) > 0:
         keywords = t["find_name_keywords"]
@@ -1323,62 +1397,160 @@ def gen_symlinkat(function_name: str, t: dict):
 
     return body
 
-def gen_recursive_traversal_config(rule: dict | None):
-    threshold = 0
-    allow_cond = "false"
-    deny_cond = "true"
+def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
+    threshold = rule["threshold"]
+    window_ns = rule.get("window_ns", 1000000000)
+    cooldown_ns = rule.get("cooldown_ns", 5000000000)
+    path_rule = rule.get("path", {})
+    path_skip_expr = gen_path_skip_expr("absolute_path", path_rule)
 
-    if rule is not None:
-        threshold = rule["threshold"]
-        path_rule = rule.get("path", {})
-        assert(isinstance(path_rule, dict))
-
-        for key in path_rule.keys():
-            assert(key == "allow" or key == "deny")
-
-        allow_conds = path_rule.get("allow", [])
-        deny_conds = path_rule.get("deny", [])
-        assert(isinstance(allow_conds, list))
-        assert(isinstance(deny_conds, list))
-
-        allow_exprs = []
-        for cond in allow_conds:
-            allow_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path", "pid"))
-
-        deny_exprs = []
-        for cond in deny_conds:
-            deny_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path", "pid"))
-
-        if len(allow_exprs) > 0:
-            allow_cond = " || ".join(allow_exprs)
-        if len(deny_exprs) > 0:
-            deny_cond = " || ".join(deny_exprs)
-
-    return f"""inline const long recursive_traversal_threshold = {threshold}L;
-
-inline bool is_recursive_traversal_allow_path(const std::optional<std::string>& absolute_path, pid_t pid) {{
-    if (!absolute_path.has_value()) {{
-        return false;
+    return f"""inline int {function_names[0]}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_getdents64) {{
+        return -1;
     }}
 
-    return {allow_cond};
-}}
-
-inline bool is_recursive_traversal_deny_path(const std::optional<std::string>& absolute_path, pid_t pid) {{
-    if (!absolute_path.has_value()) {{
-        return false;
+    if (!event.retval.has_value() || *event.retval <= 0) {{
+        return -1;
     }}
 
-    return {deny_cond};
+    const auto* args = std::get_if<Getdents64Data>(&event.args);
+    if (!args) return -1;
+
+    auto* fds = storage_fds(ctx.storage);
+    if (!fds) {{
+        return -1;
+    }}
+
+    auto fd_it = fds->find(args->fd);
+    if (fd_it == fds->end()) {{
+        return -1;
+    }}
+
+    std::optional<std::string> absolute_path = fd_it->second.path;
+    if (!absolute_path.has_value()) {{
+        return -1;
+    }}
+
+    if ({path_skip_expr}) {{
+        return -1;
+    }}
+
+    const std::string cooldown_key = "{name}";
+    auto* cooldown = storage_window(ctx.storage, "__cooldown");
+    if (!cooldown) {{
+        return -1;
+    }}
+
+    auto cooldown_it = cooldown->items.find(cooldown_key);
+    if (cooldown_it != cooldown->items.end() &&
+        event.timestamp_ns < static_cast<unsigned long>(cooldown_it->second)) {{
+        return -1;
+    }}
+
+    auto* window = storage_window(ctx.storage, "__window:{name}");
+    if (!window) {{
+        return -1;
+    }}
+
+    if (window->start_ns == 0 ||
+        event.timestamp_ns < window->start_ns ||
+        event.timestamp_ns - window->start_ns > {window_ns}UL) {{
+        window->start_ns = event.timestamp_ns;
+        window->total = 0;
+        window->items.clear();
+    }}
+
+    window->items[*absolute_path] = 1;
+    window->total = static_cast<long>(window->items.size());
+
+    if (window->total < {threshold}L) {{
+        return -1;
+    }}
+
+    cooldown->items[cooldown_key] = static_cast<long>(event.timestamp_ns + {cooldown_ns}UL);
+    window->start_ns = event.timestamp_ns;
+    window->total = 0;
+    window->items.clear();
+    return static_cast<int>(state.current_state_index + 1);
 }}
 """
 
 
-def gen_path_openat_count(function_name: str, rule: dict):
+def gen_path_openat_count(name: str, function_name: str, rule: dict):
     threshold = rule["threshold"]
+    window_ns = rule.get("window_ns", 1000000000)
+    cooldown_ns = rule.get("cooldown_ns", 5000000000)
     path_rule = rule.get("path", {})
-    assert(isinstance(path_rule, dict))
+    path_skip_expr = gen_path_skip_expr("absolute_path", path_rule)
 
+    return f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_openat) {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval < 0) {{
+        return -1;
+    }}
+
+    const auto* args = std::get_if<OpenAtData>(&event.args);
+    if (!args) return -1;
+
+    if ((args->flags & O_DIRECTORY) == O_DIRECTORY) {{
+        return -1;
+    }}
+
+    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
+    if (!absolute_path.has_value()) {{
+        return -1;
+    }}
+
+    if ({path_skip_expr}) {{
+        return -1;
+    }}
+
+    const std::string cooldown_key = "{name}";
+    auto* cooldown = storage_window(ctx.storage, "__cooldown");
+    if (!cooldown) {{
+        return -1;
+    }}
+
+    auto cooldown_it = cooldown->items.find(cooldown_key);
+    if (cooldown_it != cooldown->items.end() &&
+        event.timestamp_ns < static_cast<unsigned long>(cooldown_it->second)) {{
+        return -1;
+    }}
+
+    auto* window = storage_window(ctx.storage, "__window:{name}");
+    if (!window) {{
+        return -1;
+    }}
+
+    if (window->start_ns == 0 ||
+        event.timestamp_ns < window->start_ns ||
+        event.timestamp_ns - window->start_ns > {window_ns}UL) {{
+        window->start_ns = event.timestamp_ns;
+        window->total = 0;
+        window->items.clear();
+    }}
+
+    window->items[*absolute_path] = 1;
+    window->total = static_cast<long>(window->items.size());
+
+    if (window->total < {threshold}L) {{
+        return -1;
+    }}
+
+    cooldown->items[cooldown_key] = static_cast<long>(event.timestamp_ns + {cooldown_ns}UL);
+    window->start_ns = event.timestamp_ns;
+    window->total = 0;
+    window->items.clear();
+    return static_cast<int>(state.current_state_index + 1);
+}}
+"""
+
+
+def gen_path_skip_expr(path_name: str, path_rule: dict):
+    assert(isinstance(path_rule, dict))
     for key in path_rule.keys():
         assert(key == "allow" or key == "deny")
 
@@ -1389,18 +1561,81 @@ def gen_path_openat_count(function_name: str, rule: dict):
 
     allow_exprs = []
     for cond in allow_conds:
-        allow_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path"))
+        allow_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
 
     deny_exprs = []
     for cond in deny_conds:
-        deny_exprs.append(gen_string_match_cond("(*absolute_path)", cond, "absolute_path"))
+        deny_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
 
-    allow_cond = "false"
-    deny_cond = "true"
+    if len(allow_exprs) == 0 and len(deny_exprs) == 0:
+        return "false"
+
+    allow_cond = " || ".join(allow_exprs)
+    deny_cond = " || ".join(deny_exprs)
+    if len(allow_exprs) > 0 and len(deny_exprs) > 0:
+        return f"(({allow_cond}) || !({deny_cond}))"
     if len(allow_exprs) > 0:
-        allow_cond = " || ".join(allow_exprs)
-    if len(deny_exprs) > 0:
-        deny_cond = " || ".join(deny_exprs)
+        return allow_cond
+    return f"!({deny_cond})"
+
+
+def gen_allow_path_expr(path_name: str, path_rule: dict):
+    assert(isinstance(path_rule, dict))
+    for key in path_rule.keys():
+        assert(key == "allow" or key == "deny")
+
+    allow_conds = path_rule.get("allow", [])
+    deny_conds = path_rule.get("deny", [])
+    assert(isinstance(allow_conds, list))
+    assert(isinstance(deny_conds, list))
+    assert(len(allow_conds) > 0 or len(deny_conds) > 0)
+
+    allow_exprs = []
+    for cond in allow_conds:
+        allow_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
+
+    deny_exprs = []
+    for cond in deny_conds:
+        deny_exprs.append(gen_string_match_cond(f"(*{path_name})", cond, path_name))
+
+    cond_allow = " || ".join(allow_exprs)
+    cond_deny = " || ".join(deny_exprs)
+    if len(allow_conds) > 0 and len(deny_conds) > 0:
+        return f"(({cond_allow}) || !({cond_deny}))"
+    if len(allow_conds) > 0:
+        return cond_allow
+    return f"!({cond_deny})"
+
+
+def gen_exec_argv_setup(command_paths: list[str]):
+    assert(len(command_paths) > 0)
+    command_cond = " || ".join([f"*exec_path == \"{path}\"" for path in command_paths])
+    return f"""    std::optional<std::string> exec_path;
+    std::vector<std::string> argv;
+
+    if (event.syscall_index == SYS_execve) {{
+        const auto* args = std::get_if<ExecveData>(&event.args);
+        if (!args) return -1;
+        exec_path = get_execve_path(event.pid, args->filename);
+        argv = args->argv;
+    }} else {{
+        return -1;
+    }}
+
+    if (!event.retval.has_value() || *event.retval != 0 || !exec_path.has_value()) {{
+        return -1;
+    }}
+
+    if (!({command_cond})) {{
+        return -1;
+    }}
+
+"""
+
+
+def gen_cp_path_policy(function_name: str, rule: dict):
+    source_allow = gen_allow_path_expr("source_path", rule["source"])
+    destination_allow = gen_allow_path_expr("destination_path", rule["destination"])
 
     return f"""inline int {function_name}(Context& ctx, DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
@@ -1469,8 +1704,6 @@ def gen_transition(function_name: str, t: dict):
         return body
 
     if syscall == "execve":
-        return gen_execve(function_name, t)
-    if syscall == "execveat":
         return gen_execve(function_name, t)
     if syscall == "openat":
         return gen_openat(function_name, t)
@@ -1552,7 +1785,6 @@ if __name__ == "__main__":
 
     is_func_body = ""
     rule_def_body = ""
-    recursive_traversal_rule = None
 
     for rule in rules:
         name = rule["name"]
@@ -1561,21 +1793,24 @@ if __name__ == "__main__":
             print("error - ")
             exit(1)
 
-        if name == "recursive_traversal":
-            recursive_traversal_rule = rule
-            rule_def_body += gen_rule_def(name, timeout, [
-                "step_recursive_traversal_1",
-                "step_recursive_traversal_2"
-            ]) + "\n"
-            continue
-
-        if name == "path_openat_count":
+        if rule.get("type") == "recursive_traversal":
             function_names = [f"step_{name}_0"]
-            is_func_body += gen_path_openat_count(function_names[0], rule)
+            is_func_body += gen_recursive_traversal(name, function_names, rule)
             is_func_body += "\n"
             rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
             continue
 
+        if rule.get("type") == "path_openat_count":
+            function_names = [f"step_{name}_0"]
+            is_func_body += gen_path_openat_count(name, function_names[0], rule)
+            is_func_body += "\n"
+            rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
+            continue
+            is_func_body += "\n"
+            rule_def_body += gen_rule_def(name, timeout, function_names) + "\n"
+            continue
+        
+        print(name)
         transitions = rule["transitions"]
         
         function_names = []
@@ -1592,7 +1827,7 @@ if __name__ == "__main__":
     a = "\n".join(["    " + l for l in gen_allow_execve_paths(allow_execve_paths).splitlines()])
     b = "\n".join(["    " + l for l in rule_def_body.splitlines()])
 
-    body = codegen_rules_h_template.replace("[RECURSIVE_TRAVERSAL_CONFIG]", gen_recursive_traversal_config(recursive_traversal_rule)).replace("[IS_FUNCTION_BODY]", is_func_body).replace("[ALLOW_DEF_GEN_BODY]", a).replace("[RULE_DEF_GEN_BODY]", b)
+    body = codegen_rules_h_template.replace("[IS_FUNCTION_BODY]", is_func_body).replace("[ALLOW_DEF_GEN_BODY]", a).replace("[RULE_DEF_GEN_BODY]", b)
 
     with open("src/codegen_rules.h", "w") as f:
         f.write(body)
