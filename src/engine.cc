@@ -424,14 +424,8 @@ namespace engine {
 #if DETECTION_DEBUG
                     debug_print_syscall_event(this->rules[rule_index], state, event);
 #endif
-                    bool keep = false;
-                    if (this->rules[rule_index].on_detect.has_value()) {
-                        keep = (*this->rules[rule_index].on_detect)(state);
-                    }
-
-                    if (!keep) {
-                        done_ids.push_back(state.id);
-                    }
+                    fflush(stderr);
+                    done_ids.push_back(state.id);
                     // detected
                     continue;
                 }
