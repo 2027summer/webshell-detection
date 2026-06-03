@@ -31,6 +31,161 @@ namespace detection_rules {
 using namespace engine;
 
 
+inline std::string path_basename(const std::string& path) {
+    auto pos = path.find_last_of('/');
+    if (pos == std::string::npos) {
+        return path;
+    }
+    return path.substr(pos + 1);
+}
+
+inline bool is_staging_path(const std::string& path) {
+    return (path.starts_with("/tmp/") && path.size() > 5) ||
+           (path.starts_with("/var/tmp/") && path.size() > 9);
+}
+
+inline bool is_suspicious_exec_target_path(const std::string& path) {
+    return is_staging_path(path) ||
+           (path.starts_with("/dev/shm/") && path.size() > 9) ||
+           path.starts_with("/memfd:") ||
+           path.ends_with(" (deleted)");
+}
+
+inline bool is_dynamic_linker_path(const std::string& path) {
+    std::string name = path_basename(path);
+    static const char* linkers[] = {
+        "ld-linux-x86-64.so.2",
+        "ld-linux-aarch64.so.1",
+        "ld-linux.so.2",
+        "ld.so",
+        nullptr
+    };
+
+    for (size_t i = 0; linkers[i] != nullptr; i++) {
+        if (name == linkers[i]) {
+            return true;
+        }
+    }
+    return name.starts_with("ld-musl-") && name.ends_with(".so.1");
+}
+
+inline bool is_dynamic_linker_arg_with_value(const std::string& arg, const char* option) {
+    return arg == option || arg.starts_with(std::string(option) + "=");
+}
+
+inline std::optional<std::string> find_dynamic_linker_target(const std::vector<std::string>& argv) {
+    static const char* no_exec_options[] = {
+        "--list",
+        "--verify",
+        "--help",
+        "--version",
+        "--list-tunables",
+        "--list-diagnostics",
+        nullptr
+    };
+    static const char* options_with_value[] = {
+        "--library-path",
+        "--preload",
+        "--audit",
+        "--argv0",
+        "--inhibit-rpath",
+        nullptr
+    };
+
+    for (size_t i = 1; i < argv.size(); i++) {
+        const auto& arg = argv[i];
+        if (arg.empty()) {
+            continue;
+        }
+        if (arg == "--") {
+            for (size_t j = i + 1; j < argv.size(); j++) {
+                if (!argv[j].empty()) {
+                    return argv[j];
+                }
+            }
+            return std::nullopt;
+        }
+
+        for (size_t j = 0; no_exec_options[j] != nullptr; j++) {
+            if (arg == no_exec_options[j]) {
+                return std::nullopt;
+            }
+        }
+
+        bool is_option_with_value = false;
+        for (size_t j = 0; options_with_value[j] != nullptr; j++) {
+            if (is_dynamic_linker_arg_with_value(arg, options_with_value[j])) {
+                if (arg == options_with_value[j]) {
+                    i++;
+                }
+                is_option_with_value = true;
+                break;
+            }
+        }
+        if (is_option_with_value || arg.starts_with("-")) {
+            continue;
+        }
+
+        return arg;
+    }
+
+    return std::nullopt;
+}
+
+inline bool is_executable_mode(int mode) {
+    return (mode & 0111) != 0;
+}
+
+inline bool argv_has_path_under(pid_t pid, const std::vector<std::string>& argv, const std::string& dir) {
+    for (const auto& arg : argv) {
+        if (arg.empty() || arg.starts_with("-")) {
+            continue;
+        }
+        auto path = get_absolute_path(pid, arg);
+        if (path.has_value() && path_is_under(*path, dir)) {
+            return true;
+        }
+        if (arg.ends_with("/")) {
+            auto trimmed = arg.substr(0, arg.size() - 1);
+            auto trimmed_path = get_absolute_path(pid, trimmed);
+            if (trimmed_path.has_value() && path_is_under(*trimmed_path, dir)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+inline bool argv_contains_recursive_option(const std::vector<std::string>& argv) {
+    for (const auto& arg : argv) {
+        if (arg == "-R" || arg == "-r" || arg == "--recursive") {
+            return true;
+        }
+        if (arg.starts_with("-") && !arg.starts_with("--") &&
+            (arg.find('R') != std::string::npos || arg.find('r') != std::string::npos)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool has_payload_magic(const std::vector<char>& data) {
+    if (data.size() >= 4 && data[0] == 0x7F && data[1] == 'E' && data[2] == 'L' && data[3] == 'F') {
+        return true;
+    }
+    if (data.size() >= 2 && data[0] == '#' && data[1] == '!') {
+        return true;
+    }
+    return data.size() >= 2 && data[0] == 'M' && data[1] == 'Z';
+}
+
+inline bool fd_points_to_path(pid_t pid, unsigned int fd, const std::string& path) {
+    auto fd_path = get_fd_path(pid, fd);
+    if (!fd_path.has_value()) {
+        return false;
+    }
+    return *fd_path == path || fd_path->starts_with(path + " (deleted)");
+}
 
 // static const char* execve_deny[] = {
 //     "/usr/bin/ls"
@@ -283,6 +438,7 @@ inline int step_openat_db(Context& ctx, DetectionState& state, const SyscallEven
     state.captured.push_back(*event.retval);
     state.captured.push_back(0L);
     state.captured.push_back(*path);
+
     return static_cast<int>(state.current_state_index + 1);
 }
 
@@ -375,6 +531,13 @@ inline void register_rules(engine::Engine& engine) {
         .timeout_ns = 1000000000UL,
         .transitions = {
             detection_rules::step_execve_grep_recursive,
+        },
+    });
+    engine.add_rule((DetectionRule) {
+        .name = "dynamic_linker_suspicious_target",
+        .timeout_ns = 1000000000UL,
+        .transitions = {
+            detection_rules::step_dynamic_linker_suspicious_target,
         },
     });
     register_codegen_rules(engine);
