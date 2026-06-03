@@ -8,11 +8,10 @@
 #include <sys/ptrace.h>
 #include "detection_state.h"
 #include "rule.h"
+#include "storage.h"
 #include "syscall_event.h"
 
 namespace engine {
-    using Storage = std::unordered_map<std::string, std::variant<long, std::string>>;
-
     class Engine {
         public:
             void add_tracked_pid(pid_t pid, pid_t parent_pid = 0);
@@ -33,6 +32,7 @@ namespace engine {
             void copy_detection_states(pid_t parent_pid, pid_t child_pid);
             void process_allow_list(const SyscallEvent& event);
             void process_from_shell(SyscallEvent& event);
+            void update_storage(const SyscallEvent& event);
 
             std::unordered_map<pid_t, std::optional<SyscallEvent>> tracked_pids;
             std::unordered_set<pid_t> from_shell_pids;

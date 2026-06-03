@@ -5,13 +5,13 @@
 #include <vector>
 #include <unordered_map>
 #include <variant>
+#include "storage.h"
 #include "syscall_event.h"
 #include "detection_state.h"
 
 namespace engine {
 
 struct DetectionState;
-using Storage = std::unordered_map<std::string, std::variant<long, std::string>>;
 
 struct Context {
     Storage &storage;

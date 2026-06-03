@@ -643,6 +643,8 @@ namespace engine {
             return;
         }
 
+        update_storage(event);
+
         process_transition(event);
 
         // 중복 처리 방지를 위해 마지막에 호출

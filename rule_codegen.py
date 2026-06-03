@@ -1511,42 +1511,34 @@ def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
         return -1;
     }}
 
-    const std::string cooldown_key = "{name}";
-    auto* cooldown = storage_window(ctx.storage, "__cooldown");
-    if (!cooldown) {{
+    auto* counter = storage_counter(ctx.storage, "{name}");
+    if (!counter) {{
         return -1;
     }}
 
-    auto cooldown_it = cooldown->items.find(cooldown_key);
-    if (cooldown_it != cooldown->items.end() &&
-        event.timestamp_ns < static_cast<unsigned long>(cooldown_it->second)) {{
+    if (event.timestamp_ns < counter->cooldown_until_ns) {{
         return -1;
     }}
 
-    auto* window = storage_window(ctx.storage, "__window:{name}");
-    if (!window) {{
+    if (counter->start_ns == 0 ||
+        event.timestamp_ns < counter->start_ns ||
+        event.timestamp_ns - counter->start_ns > {window_ns}UL) {{
+        counter->start_ns = event.timestamp_ns;
+        counter->total = 0;
+        counter->items.clear();
+    }}
+
+    counter->items[*absolute_path] = 1;
+    counter->total = static_cast<long>(counter->items.size());
+
+    if (counter->total < {threshold}L) {{
         return -1;
     }}
 
-    if (window->start_ns == 0 ||
-        event.timestamp_ns < window->start_ns ||
-        event.timestamp_ns - window->start_ns > {window_ns}UL) {{
-        window->start_ns = event.timestamp_ns;
-        window->total = 0;
-        window->items.clear();
-    }}
-
-    window->items[*absolute_path] = 1;
-    window->total = static_cast<long>(window->items.size());
-
-    if (window->total < {threshold}L) {{
-        return -1;
-    }}
-
-    cooldown->items[cooldown_key] = static_cast<long>(event.timestamp_ns + {cooldown_ns}UL);
-    window->start_ns = event.timestamp_ns;
-    window->total = 0;
-    window->items.clear();
+    counter->cooldown_until_ns = event.timestamp_ns + {cooldown_ns}UL;
+    counter->start_ns = event.timestamp_ns;
+    counter->total = 0;
+    counter->items.clear();
     return static_cast<int>(state.current_state_index + 1);
 }}
 """
@@ -1584,42 +1576,34 @@ def gen_path_openat_count(name: str, function_name: str, rule: dict):
         return -1;
     }}
 
-    const std::string cooldown_key = "{name}";
-    auto* cooldown = storage_window(ctx.storage, "__cooldown");
-    if (!cooldown) {{
+    auto* counter = storage_counter(ctx.storage, "{name}");
+    if (!counter) {{
         return -1;
     }}
 
-    auto cooldown_it = cooldown->items.find(cooldown_key);
-    if (cooldown_it != cooldown->items.end() &&
-        event.timestamp_ns < static_cast<unsigned long>(cooldown_it->second)) {{
+    if (event.timestamp_ns < counter->cooldown_until_ns) {{
         return -1;
     }}
 
-    auto* window = storage_window(ctx.storage, "__window:{name}");
-    if (!window) {{
+    if (counter->start_ns == 0 ||
+        event.timestamp_ns < counter->start_ns ||
+        event.timestamp_ns - counter->start_ns > {window_ns}UL) {{
+        counter->start_ns = event.timestamp_ns;
+        counter->total = 0;
+        counter->items.clear();
+    }}
+
+    counter->items[*absolute_path] = 1;
+    counter->total = static_cast<long>(counter->items.size());
+
+    if (counter->total < {threshold}L) {{
         return -1;
     }}
 
-    if (window->start_ns == 0 ||
-        event.timestamp_ns < window->start_ns ||
-        event.timestamp_ns - window->start_ns > {window_ns}UL) {{
-        window->start_ns = event.timestamp_ns;
-        window->total = 0;
-        window->items.clear();
-    }}
-
-    window->items[*absolute_path] = 1;
-    window->total = static_cast<long>(window->items.size());
-
-    if (window->total < {threshold}L) {{
-        return -1;
-    }}
-
-    cooldown->items[cooldown_key] = static_cast<long>(event.timestamp_ns + {cooldown_ns}UL);
-    window->start_ns = event.timestamp_ns;
-    window->total = 0;
-    window->items.clear();
+    counter->cooldown_until_ns = event.timestamp_ns + {cooldown_ns}UL;
+    counter->start_ns = event.timestamp_ns;
+    counter->total = 0;
+    counter->items.clear();
     return static_cast<int>(state.current_state_index + 1);
 }}
 """
