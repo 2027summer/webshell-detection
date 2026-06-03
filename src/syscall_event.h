@@ -38,6 +38,14 @@ struct ExecveData {
     std::vector<std::string> envp;
 };
 
+struct ExecveAtData {
+    int dirfd;
+    std::string pathname;
+    std::vector<std::string> argv;
+    std::vector<std::string> envp;
+    int flags;
+};
+
 struct ChdirData {
     std::string filename;
 };
@@ -145,6 +153,7 @@ using SyscallArgs = std::variant<
     OpenAtData,
     WriteData,
     ExecveData,
+    ExecveAtData,
     ChdirData,
     ChmodData,
     FchmodAtData,

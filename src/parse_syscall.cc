@@ -93,15 +93,36 @@ namespace engine {
     std::optional<ExecveData> parse_execve(pid_t pid, __ptrace_syscall_info info) {
         auto filename = read_child_string(pid, info.entry.args[0]);
         auto argv = read_child_string_vector(pid, info.entry.args[1], 16);
+        auto envp = read_child_string_vector(pid, info.entry.args[2], 64);
 
-        if (!filename.has_value() || !argv.has_value()) {
+        if (!filename.has_value() || !argv.has_value() || !envp.has_value()) {
             return std::nullopt;
         }
 
         return ExecveData {
             .filename = *filename,
             .argv = *argv,
-            .envp = {}
+            .envp = *envp
+        };
+    }
+
+    std::optional<ExecveAtData> parse_execveat(pid_t pid, __ptrace_syscall_info info) {
+        int dirfd = static_cast<int>(info.entry.args[0]);
+        auto pathname = read_child_string(pid, info.entry.args[1]);
+        auto argv = read_child_string_vector(pid, info.entry.args[2], 16);
+        auto envp = read_child_string_vector(pid, info.entry.args[3], 64);
+        int flags = static_cast<int>(info.entry.args[4]);
+
+        if (!pathname.has_value() || !argv.has_value() || !envp.has_value()) {
+            return std::nullopt;
+        }
+
+        return ExecveAtData {
+            .dirfd = dirfd,
+            .pathname = *pathname,
+            .argv = *argv,
+            .envp = *envp,
+            .flags = flags
         };
     }
 

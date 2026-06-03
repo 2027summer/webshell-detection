@@ -15,6 +15,26 @@
 #endif
 
 namespace engine {
+    std::optional<std::string> get_exec_path(const SyscallEvent& event) {
+        if (event.syscall_index == SYS_execve) {
+            const auto* args = std::get_if<ExecveData>(&event.args);
+            if (!args) {
+                return std::nullopt;
+            }
+            return get_execve_path(event.pid, args->filename);
+        }
+
+        if (event.syscall_index == SYS_execveat) {
+            const auto* args = std::get_if<ExecveAtData>(&event.args);
+            if (!args) {
+                return std::nullopt;
+            }
+            return get_execveat_path(event.pid, args->dirfd, args->pathname);
+        }
+
+        return std::nullopt;
+    }
+
     void Engine::add_allow_execve_path(const std::string& path) {
         allow_execve_paths.insert(path);
     }
@@ -202,7 +222,7 @@ namespace engine {
     }
 
     void Engine::process_allow_list(const SyscallEvent& event) {
-        if (event.syscall_index != SYS_execve) {
+        if (event.syscall_index != SYS_execve && event.syscall_index != SYS_execveat) {
             return;
         }
 
@@ -215,12 +235,7 @@ namespace engine {
             return;
         }
 
-        const auto* args = std::get_if<ExecveData>(&event.args);
-        if (!args) {
-            return;
-        }
-
-        auto execve_path = get_absolute_path(event.pid, args->filename);
+        auto execve_path = get_exec_path(event);
         if (!execve_path.has_value()) {
             return;
         }
@@ -235,7 +250,7 @@ namespace engine {
     }
 
     void Engine::process_from_shell(SyscallEvent& event) {
-        if (event.syscall_index != SYS_execve) {
+        if (event.syscall_index != SYS_execve && event.syscall_index != SYS_execveat) {
             return;
         }
 
@@ -244,15 +259,15 @@ namespace engine {
             return;
         }
 
-        const auto* args = std::get_if<ExecveData>(&event.args);
-        if (!args) {
+        auto execve_path = get_exec_path(event);
+        if (!execve_path.has_value()) {
             return;
         }
 
-        fprintf(stderr, "execve: %s - pid: %d\n", args->filename.c_str(), event.pid);
+        fprintf(stderr, "execve: %s - pid: %d\n", execve_path->c_str(), event.pid);
 
-        if (args->filename != "/bin/sh" && args->filename != "/usr/bin/sh" &&
-            args->filename != "/bin/bash" && args->filename != "/usr/bin/bash") {
+        if (*execve_path != "/bin/sh" && *execve_path != "/usr/bin/sh" &&
+            *execve_path != "/bin/bash" && *execve_path != "/usr/bin/bash") {
             return;
         }
         // if (args->argv.size() < 2) {
@@ -313,6 +328,13 @@ namespace engine {
         switch (info.entry.nr) {
             case SYS_execve: {
                 auto args = parse_execve(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_execveat: {
+                auto args = parse_execveat(pid, info);
                 if (args.has_value()) {
                     event.args = *args;
                 }
