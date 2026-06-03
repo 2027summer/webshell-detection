@@ -14,6 +14,9 @@ namespace engine {
 
     inline std::string normalize_path(const fs::path& path, bool keep_trailing_slash) {
         std::string normalized = path.lexically_normal().string();
+        if (keep_trailing_slash && normalized.size() > 1 && !normalized.ends_with("/")) {
+            normalized.push_back('/');
+        }
         if (!keep_trailing_slash && normalized.size() > 1 && normalized.ends_with("/")) {
             normalized.pop_back();
         }
