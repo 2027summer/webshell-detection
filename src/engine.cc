@@ -19,6 +19,12 @@
 #endif
 
 namespace engine {
+    unsigned long monotonic_time_ns() {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec);
+    }
+
 #if DETECTION_DEBUG
     const char* debug_syscall_name(unsigned long syscall_index) {
         switch (syscall_index) {
@@ -344,7 +350,8 @@ namespace engine {
         tracked_pids.erase(pid);
         from_shell_pids.erase(pid);
         allow_pids.erase(pid);
-        storage.erase(pid);
+        cooldown_until.erase(pid);
+        fd_tables.erase(pid);
     }
 
     bool Engine::is_tracked(pid_t pid) {
@@ -371,6 +378,57 @@ namespace engine {
         this->initial_states.push_back(initial_state);
     }
 
+    bool Engine::has_active_state(pid_t pid, size_t rule_index) {
+        for (const auto& [id, state] : active_detection_states) {
+            if (state.pid == pid && state.rule_index == rule_index) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool Engine::in_cooldown(pid_t pid, size_t rule_index, unsigned long now_ns) {
+        auto pid_it = cooldown_until.find(pid);
+        if (pid_it == cooldown_until.end()) {
+            return false;
+        }
+
+        auto rule_it = pid_it->second.find(rule_index);
+        if (rule_it == pid_it->second.end()) {
+            return false;
+        }
+
+        if (now_ns < rule_it->second) {
+            return true;
+        }
+
+        pid_it->second.erase(rule_it);
+        return false;
+    }
+
+    void Engine::set_cooldown(pid_t pid, size_t rule_index, unsigned long now_ns) {
+        long cooldown_ns = rules[rule_index].cooldown_ns;
+        if (cooldown_ns <= 0) {
+            return;
+        }
+        cooldown_until[pid][rule_index] = now_ns + static_cast<unsigned long>(cooldown_ns);
+    }
+
+    void Engine::report_detection(const DetectionState& state, const SyscallEvent& event) {
+        fprintf(
+            stderr,
+            "[DEBUG] DETECTED: id: %lu rule index: %lu rule name: %s\n",
+            state.id,
+            state.rule_index,
+            rules[state.rule_index].name.c_str()
+        );
+#if DETECTION_DEBUG
+        debug_print_syscall_event(rules[state.rule_index], state, event);
+#endif
+        fflush(stderr);
+        set_cooldown(state.pid, state.rule_index, event.timestamp_ns);
+    }
+
     void Engine::process_transition(const SyscallEvent& event) {
         // TODO: iterater 없이 하는 방법
         std::vector<size_t> done_ids;
@@ -378,22 +436,10 @@ namespace engine {
         for (; iter != active_detection_states.end(); iter++) {
             auto &state = iter->second;
             size_t rule_index = state.rule_index;
-            size_t current_state_index = state.current_state_index;
-
-            struct timespec ts;
-            clock_gettime(CLOCK_MONOTONIC, &ts);
-
-            unsigned long current_time_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec);
 
             if (this->rules[rule_index].timeout_ns >= 0 &&
-                current_time_ns - state.start_time_ns > static_cast<unsigned long>(this->rules[rule_index].timeout_ns)) {
-                // fprintf(
-                //     stderr,
-                //     "[DEBUG] timeout id: %lu rule_index: %lu current_state_index: %lu\n",
-                //     state.id,
-                //     rule_index,
-                //     current_state_index
-                // );
+                (event.timestamp_ns < state.start_time_ns ||
+                 event.timestamp_ns - state.start_time_ns > static_cast<unsigned long>(this->rules[rule_index].timeout_ns))) {
                 done_ids.push_back(state.id);
                 continue;
             }
@@ -402,34 +448,14 @@ namespace engine {
                 continue;
             }
 
-            Context ctx = {
-                .storage = storage[event.pid]
-            };
             // fprintf(stderr, "[DEBUG] check id: %lu current_state_index: %lu\n", state.id, current_state_index);
-            int next_state_index = this->rules[rule_index].transitions[current_state_index](ctx, state, event);
-            if (next_state_index >= 0) {
-                size_t final_state_index = this->rules[rule_index].transitions.size();
-                if (static_cast<size_t>(next_state_index) > final_state_index) {
-                    continue;
-                }
-
-                if (static_cast<size_t>(next_state_index) == final_state_index) {
-                    fprintf(
-                        stderr, 
-                        "[DEBUG] DETECTED: id: %lu rule index: %lu rule name: %s\n",
-                        state.id,
-                        rule_index,
-                        this->rules[rule_index].name.c_str()
-                    );
-#if DETECTION_DEBUG
-                    debug_print_syscall_event(this->rules[rule_index], state, event);
-#endif
-                    fflush(stderr);
+            TransitionResult action = this->rules[rule_index].transitions[state.current_state_index](fd_tables[event.pid], state, event);
+            if (action == TransitionResult::Advance) {
+                state.current_state_index++;
+                if (state.current_state_index == this->rules[rule_index].transitions.size()) {
+                    report_detection(state, event);
                     done_ids.push_back(state.id);
-                    // detected
-                    continue;
                 }
-                state.current_state_index = static_cast<size_t>(next_state_index);
             }
         }
 
@@ -441,47 +467,35 @@ namespace engine {
     void Engine::process_first_transition(const SyscallEvent& event) {
         for (DetectionState& initial_state : this->initial_states) {
             size_t rule_index = initial_state.rule_index;
-            struct timespec ts;
-            clock_gettime(CLOCK_MONOTONIC, &ts);
+            auto& rule = this->rules[rule_index];
+
+            if (rule.single_active_per_pid && has_active_state(event.pid, rule_index)) {
+                continue;
+            }
+
+            if (in_cooldown(event.pid, rule_index, event.timestamp_ns)) {
+                continue;
+            }
 
             DetectionState next_state = initial_state;
             next_state.id = this->detection_state_count;
             next_state.pid = event.pid;
             next_state.current_state_index = 0;
-            next_state.start_time_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec);
-            next_state.captured.clear();
+            next_state.start_time_ns = event.timestamp_ns;
+            next_state.data = std::any();
 
-            Context ctx = {
-                .storage = storage[event.pid]
-            };
-            int next_state_index = this->rules[rule_index].transitions[0](ctx, next_state, event);
-            if (next_state_index >= 0) {
-                // fprintf(stderr, "[DEBUG] run id: %lu\n", this->detection_state_count);
-                size_t final_state_index = this->rules[rule_index].transitions.size();
-                if (static_cast<size_t>(next_state_index) > final_state_index) {
-                    continue;
-                }
-
-                if (static_cast<size_t>(next_state_index) == final_state_index) {
-                    fprintf(
-                        stderr, 
-                        "[DEBUG] DETECTED: id: %lu rule index: %lu rule name: %s\n",
-                        next_state.id,
-                        next_state.rule_index,
-                        this->rules[rule_index].name.c_str()
-                    );
-#if DETECTION_DEBUG
-                    debug_print_syscall_event(this->rules[rule_index], next_state, event);
-#endif
-                    // step length == 1 짜리
-                    // 조건 완료라서 탐지됨
-                    continue;
-                }
-
-                next_state.current_state_index = static_cast<size_t>(next_state_index);
-
+            TransitionResult action = this->rules[rule_index].transitions[0](fd_tables[event.pid], next_state, event);
+            if (action == TransitionResult::Stay) {
                 this->active_detection_states[next_state.id] = std::move(next_state);
                 this->detection_state_count++;
+            } else if (action == TransitionResult::Advance) {
+                next_state.current_state_index++;
+                if (next_state.current_state_index == this->rules[rule_index].transitions.size()) {
+                    report_detection(next_state, event);
+                } else {
+                    this->active_detection_states[next_state.id] = std::move(next_state);
+                    this->detection_state_count++;
+                }
             }
         }
     }
@@ -562,13 +576,13 @@ namespace engine {
         }
 
         event.retval = 0;
+        event.timestamp_ns = monotonic_time_ns();
         process_event(event);
         it->second = std::nullopt;
     }
 
-    void Engine::update_storage(const SyscallEvent& event) {
-        auto* fds = storage_fds(storage[event.pid]);
-        if (!fds) return;
+    void Engine::update_fd_table(const SyscallEvent& event) {
+        auto& fds = fd_tables[event.pid];
 
         if (event.syscall_index == SYS_openat) {
             if (!event.retval.has_value() || *event.retval < 0) {
@@ -583,7 +597,7 @@ namespace engine {
                 return;
             }
 
-            (*fds)[*event.retval] = FdInfo {
+            fds[*event.retval] = FdInfo {
                 .path = *path,
                 .flags = args->flags,
             };
@@ -595,7 +609,7 @@ namespace engine {
             const auto* args = std::get_if<CloseData>(&event.args);
             if (!args) return;
 
-            fds->erase(args->fd);
+            fds.erase(args->fd);
         } else if (event.syscall_index == SYS_dup2) {
             if (!event.retval.has_value() || *event.retval < 0) {
                 return;
@@ -607,13 +621,13 @@ namespace engine {
                 return;
             }
 
-            auto old_fd = fds->find(args->oldfd);
-            if (old_fd == fds->end()) {
-                fds->erase(args->newfd);
+            auto old_fd = fds.find(args->oldfd);
+            if (old_fd == fds.end()) {
+                fds.erase(args->newfd);
                 return;
             }
 
-            (*fds)[args->newfd] = old_fd->second;
+            fds[args->newfd] = old_fd->second;
         }
     }
 
@@ -637,7 +651,7 @@ namespace engine {
             return;
         }
 
-        update_storage(event);
+        update_fd_table(event);
 
         process_transition(event);
 
@@ -650,9 +664,6 @@ namespace engine {
             return;
         }
 
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-
         bool is_from_shell = from_shell_pids.contains(pid);
 
         SyscallEvent event {
@@ -660,7 +671,7 @@ namespace engine {
             .pid = pid,
             .retval = std::nullopt,
             .from_shell = is_from_shell,
-            .timestamp_ns = static_cast<unsigned long>(ts.tv_sec) * 1000000000UL + static_cast<unsigned long>(ts.tv_nsec)
+            .timestamp_ns = monotonic_time_ns()
         };
 
         switch (info.entry.nr) {
@@ -830,6 +841,7 @@ namespace engine {
 
         long retval = parse_syscall_rval(info);
         it->second->retval = retval;
+        it->second->timestamp_ns = monotonic_time_ns();
 
         process_event(*it->second);
     }
