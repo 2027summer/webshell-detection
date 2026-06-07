@@ -134,13 +134,13 @@ inline bool is_staging_path(const std::string& path) {
 // }
 
 
-inline bool fd_points_to_path(pid_t pid, unsigned int fd, const std::string& path) {
-    auto fd_path = get_fd_path(pid, fd);
-    if (!fd_path.has_value()) {
-        return false;
-    }
-    return *fd_path == path || fd_path->starts_with(path + " (deleted)");
-}
+// inline bool fd_points_to_path(pid_t pid, unsigned int fd, const std::string& path) {
+//     auto fd_path = get_fd_path(pid, fd);
+//     if (!fd_path.has_value()) {
+//         return false;
+//     }
+//     return *fd_path == path || fd_path->starts_with(path + " (deleted)");
+// }
 
 // static const char* execve_deny[] = {
 //     "/usr/bin/ls"
@@ -407,16 +407,30 @@ inline int step_openat_db(DetectionState& state, const SyscallEvent& event) {
 }
 
 inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) {
+    auto* data = std::any_cast<ReadDbLargeState>(&state.data);
+    if (!data) {
+        return NO_TRANSITION;
+    }
+
+    if (event.syscall_index == SYS_dup2) {
+        if (!event.retval.has_value() || *event.retval < 0) {
+            return NO_TRANSITION;
+        }
+
+        const auto* args = std::get_if<Dup2Data>(&event.args);
+        if (!args) return NO_TRANSITION;
+
+        if (static_cast<long>(args->oldfd) == data->fd) {
+            data->fd = args->newfd;
+            return static_cast<int>(state.current_state_index);
+        }
+    }
+
     if (event.syscall_index != SYS_read && event.syscall_index != SYS_pread64) {
         return NO_TRANSITION;
     }
 
     if (!event.retval.has_value() || *event.retval <= 0) {
-        return NO_TRANSITION;
-    }
-
-    auto* data = std::any_cast<ReadDbLargeState>(&state.data);
-    if (!data) {
         return NO_TRANSITION;
     }
 
@@ -427,9 +441,9 @@ inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) 
         return NO_TRANSITION;
     }
 
-    if (!fd_points_to_path(event.pid, args->fd, data->path)) {
-        return NO_TRANSITION;
-    }
+    // if (!fd_points_to_path(event.pid, args->fd, data->path)) {
+    //     return NO_TRANSITION;
+    // }
 
     data->bytes += *event.retval;
     if (data->bytes < 30000) {

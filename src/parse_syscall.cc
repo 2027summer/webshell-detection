@@ -97,14 +97,14 @@ namespace engine {
         auto argv = read_child_string_vector(pid, info.entry.args[1], 16);
         auto envp = read_child_string_vector(pid, info.entry.args[2], 64);
 
-        if (!filename.has_value() || !argv.has_value() || !envp.has_value()) {
+        if (!filename.has_value()) {
             return std::nullopt;
         }
 
         return ExecveData {
             .filename = *filename,
-            .argv = *argv,
-            .envp = *envp
+            .argv = argv.value_or(std::vector<std::string>{}),
+            .envp = envp.value_or(std::vector<std::string>{})
         };
     }
 
@@ -115,15 +115,15 @@ namespace engine {
         auto envp = read_child_string_vector(pid, info.entry.args[3], 64);
         int flags = static_cast<int>(info.entry.args[4]);
 
-        if (!pathname.has_value() || !argv.has_value() || !envp.has_value()) {
+        if (!pathname.has_value()) {
             return std::nullopt;
         }
 
         return ExecveAtData {
             .dirfd = dirfd,
             .pathname = *pathname,
-            .argv = *argv,
-            .envp = *envp,
+            .argv = argv.value_or(std::vector<std::string>{}),
+            .envp = envp.value_or(std::vector<std::string>{}),
             .flags = flags
         };
     }

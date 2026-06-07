@@ -600,9 +600,7 @@ namespace engine {
 
 #if DETECTION_REQUIRE_LISTEN
         if (!detection_started) {
-            if (event.syscall_index != SYS_listen ||
-                !event.retval.has_value() ||
-                *event.retval != 0) {
+            if (event.syscall_index != SYS_listen || !event.retval.has_value() || *event.retval != 0) {
                 return;
             }
 
@@ -729,6 +727,13 @@ namespace engine {
             }
             case SYS_dup2: {
                 auto args = parse_dup2(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_close: {
+                auto args = parse_close(pid, info);
                 if (args.has_value()) {
                     event.args = *args;
                 }

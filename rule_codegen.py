@@ -176,7 +176,7 @@ struct PathCountState {{
 }};
 
 struct RecursiveTraversalState {{
-    std::unordered_map<long, std::string> fd_paths;
+    std::unordered_map<unsigned int, std::string> fd_paths;
     std::unordered_set<std::string> paths;
 }};
 
@@ -1091,28 +1091,35 @@ def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
     path_skip_expr = gen_path_skip_expr("absolute_path", path_rule)
 
     return f"""inline int {function_names[0]}(DetectionState& state, const SyscallEvent& event) {{
-    if (event.syscall_index != SYS_openat) {{
-        return NO_TRANSITION;
-    }}
+    if (event.syscall_index == SYS_openat) {{
+        if (!event.retval.has_value() || *event.retval < 0) {{
+            return NO_TRANSITION;
+        }}
 
-    if (!event.retval.has_value() || *event.retval < 0) {{
-        return NO_TRANSITION;
-    }}
+        const auto* args = std::get_if<OpenAtData>(&event.args);
+        if (!args) return NO_TRANSITION;
 
-    const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+        auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
+        if (!absolute_path.has_value()) {{
+            return NO_TRANSITION;
+        }}
 
-    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
-    if (!absolute_path.has_value()) {{
-        return NO_TRANSITION;
-    }}
+        if ({path_skip_expr}) {{
+            return NO_TRANSITION;
+        }}
 
-    if ({path_skip_expr}) {{
-        return NO_TRANSITION;
-    }}
+        if (!state.data.has_value()) {{
+            state.data = RecursiveTraversalState {{}};
+        }}
 
-    if (!state.data.has_value()) {{
-        state.data = RecursiveTraversalState {{}};
+        auto* data = std::any_cast<RecursiveTraversalState>(&state.data);
+        if (!data) {{
+            return NO_TRANSITION;
+        }}
+
+        data->fd_paths[static_cast<unsigned int>(*event.retval)] = *absolute_path;
+
+        return static_cast<int>(state.current_state_index);
     }}
 
     auto* data = std::any_cast<RecursiveTraversalState>(&state.data);
@@ -1120,9 +1127,47 @@ def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
         return NO_TRANSITION;
     }}
 
-    data->fd_paths[*event.retval] = *absolute_path;
+    if (event.syscall_index == SYS_close) {{
+        if (!event.retval.has_value() || *event.retval != 0) {{
+            return NO_TRANSITION;
+        }}
 
-    return static_cast<int>(state.current_state_index + 1);
+        const auto* args = std::get_if<CloseData>(&event.args);
+        if (!args) return NO_TRANSITION;
+
+        data->fd_paths.erase(args->fd);
+
+        return static_cast<int>(state.current_state_index);
+    }}
+
+    if (event.syscall_index != SYS_getdents64) {{
+        return NO_TRANSITION;
+    }}
+
+    if (!event.retval.has_value() || *event.retval <= 0) {{
+        return NO_TRANSITION;
+    }}
+
+    const auto* args = std::get_if<Getdents64Data>(&event.args);
+    if (!args) return NO_TRANSITION;
+
+    auto fd_it = data->fd_paths.find(args->fd);
+    if (fd_it == data->fd_paths.end()) {{
+        return NO_TRANSITION;
+    }}
+
+    auto dir_id = get_fd_identity(event.pid, args->fd);
+    if (!dir_id.has_value()) {{
+        return NO_TRANSITION;
+    }}
+
+    data->paths.insert(*dir_id);
+
+    if (static_cast<long>(data->paths.size()) < {threshold}L) {{
+        return static_cast<int>(state.current_state_index + 1);
+    }}
+
+    return static_cast<int>(state.current_state_index + 2);
 }}
 
 inline int {function_names[1]}(DetectionState& state, const SyscallEvent& event) {{
@@ -1148,9 +1193,9 @@ inline int {function_names[1]}(DetectionState& state, const SyscallEvent& event)
             return NO_TRANSITION;
         }}
 
-        data->fd_paths[*event.retval] = *absolute_path;
+        data->fd_paths[static_cast<unsigned int>(*event.retval)] = *absolute_path;
 
-        return static_cast<int>(state.current_state_index);
+        return static_cast<int>(state.current_state_index - 1);
     }}
 
     if (event.syscall_index == SYS_close) {{
@@ -1162,28 +1207,6 @@ inline int {function_names[1]}(DetectionState& state, const SyscallEvent& event)
         if (!args) return NO_TRANSITION;
 
         data->fd_paths.erase(args->fd);
-
-        return static_cast<int>(state.current_state_index);
-    }}
-
-    if (event.syscall_index == SYS_dup2) {{
-        if (!event.retval.has_value() || *event.retval < 0) {{
-            return NO_TRANSITION;
-        }}
-
-        const auto* args = std::get_if<Dup2Data>(&event.args);
-        if (!args) return NO_TRANSITION;
-
-        if (args->oldfd == args->newfd) {{
-            return static_cast<int>(state.current_state_index);
-        }}
-
-        auto old_fd = data->fd_paths.find(args->oldfd);
-        if (old_fd == data->fd_paths.end()) {{
-            data->fd_paths.erase(args->newfd);
-        }} else {{
-            data->fd_paths[args->newfd] = old_fd->second;
-        }}
 
         return static_cast<int>(state.current_state_index);
     }}
@@ -1204,7 +1227,12 @@ inline int {function_names[1]}(DetectionState& state, const SyscallEvent& event)
         return NO_TRANSITION;
     }}
 
-    data->paths.insert(fd_it->second);
+    auto dir_id = get_fd_identity(event.pid, args->fd);
+    if (!dir_id.has_value()) {{
+        return NO_TRANSITION;
+    }}
+
+    data->paths.insert(*dir_id);
 
     if (static_cast<long>(data->paths.size()) < {threshold}L) {{
         return static_cast<int>(state.current_state_index);
@@ -1231,6 +1259,9 @@ def gen_path_openat_count(name: str, function_name: str, rule: dict):
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
     if (!args) return NO_TRANSITION;
+    if ((args->flags & O_DIRECTORY) == O_DIRECTORY) {{
+        return NO_TRANSITION;
+    }}
 
     auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!absolute_path.has_value()) {{
