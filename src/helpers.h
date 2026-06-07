@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <sys/stat.h>
 #include <vector>
 #include <unistd.h>
 
@@ -90,18 +89,6 @@ namespace engine {
 
         buf[len] = '\0';
         return fs::path(buf).lexically_normal().string();
-    }
-
-    inline std::optional<std::string> get_fd_identity(pid_t pid, unsigned int fd) {
-        char path[64];
-        snprintf(path, 64, "/proc/%d/fd/%u", pid, fd);
-
-        struct stat st;
-        if (stat(path, &st) != 0) {
-            return std::nullopt;
-        }
-
-        return std::to_string(st.st_dev) + ":" + std::to_string(st.st_ino);
     }
 
     inline std::optional<unsigned int> parse_fd_path(const std::string& path, const std::string& prefix) {

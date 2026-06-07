@@ -93,11 +93,19 @@ def gen_destination_match_cond(condition: dict, value: str = "args"):
 def condition_has_key(condition: dict, key: str):
     if key in condition:
         return True
-    for nested_key in ["all", "any"]:
-        if nested_key in condition:
-            for cond in condition[nested_key]:
-                if condition_has_key(cond, key):
-                    return True
+    # for nested_key in ["all", "any"]:
+    #     if nested_key in condition:
+    #         for cond in condition[nested_key]:
+    #             if condition_has_key(cond, key):
+    #                 return True
+    if "all" in condition:
+        for cond in condition["all"]:
+            if condition_has_key(cond, key):
+                return True
+    if "any" in condition:
+        for cond in condition["any"]:
+            if condition_has_key(cond, key):
+                return True
     return False
 
 
@@ -1156,12 +1164,12 @@ def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
         return NO_TRANSITION;
     }}
 
-    auto dir_id = get_fd_identity(event.pid, args->fd);
-    if (!dir_id.has_value()) {{
+    auto fd_path = get_fd_path(event.pid, args->fd);
+    if (!fd_path.has_value()) {{
         return NO_TRANSITION;
     }}
 
-    data->paths.insert(*dir_id);
+    data->paths.insert(*fd_path);
 
     if (static_cast<long>(data->paths.size()) < {threshold}L) {{
         return static_cast<int>(state.current_state_index + 1);
@@ -1227,12 +1235,12 @@ inline int {function_names[1]}(DetectionState& state, const SyscallEvent& event)
         return NO_TRANSITION;
     }}
 
-    auto dir_id = get_fd_identity(event.pid, args->fd);
-    if (!dir_id.has_value()) {{
+    auto fd_path = get_fd_path(event.pid, args->fd);
+    if (!fd_path.has_value()) {{
         return NO_TRANSITION;
     }}
 
-    data->paths.insert(*dir_id);
+    data->paths.insert(*fd_path);
 
     if (static_cast<long>(data->paths.size()) < {threshold}L) {{
         return static_cast<int>(state.current_state_index);

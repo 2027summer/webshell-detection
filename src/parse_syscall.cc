@@ -139,19 +139,19 @@ namespace engine {
             return std::nullopt;
         }
 
-        bool existed_before = false;
-        auto absolute_path = get_absolute_path_at(pid, dirfd, *pathname);
-        if (absolute_path.has_value()) {
-            std::error_code ec;
-            existed_before = fs::exists(*absolute_path, ec);
-        }
+        // bool existed_before = false;
+        // auto absolute_path = get_absolute_path_at(pid, dirfd, *pathname);
+        // if (absolute_path.has_value()) {
+        //     std::error_code ec;
+        //     existed_before = fs::exists(*absolute_path, ec);
+        // }
 
         return OpenAtData {
             .dirfd = dirfd,
             .pathname = *pathname,
             .flags = flags,
             .mode = mode,
-            .existed_before = existed_before
+            // .existed_before = existed_before
         };
     }
 
@@ -433,6 +433,15 @@ namespace engine {
             .dirp = info.entry.args[1],
             .count = static_cast<unsigned int>(info.entry.args[2]),
             .entries = {}
+        };
+    }
+
+    std::optional<CopyFileRangeData> parse_copy_file_range(pid_t, __ptrace_syscall_info info) {
+        return CopyFileRangeData {
+            .fd_in = static_cast<unsigned int>(info.entry.args[0]),
+            .fd_out = static_cast<unsigned int>(info.entry.args[2]),
+            .len = static_cast<size_t>(info.entry.args[4]),
+            .flags = static_cast<unsigned int>(info.entry.args[5])
         };
     }
 }

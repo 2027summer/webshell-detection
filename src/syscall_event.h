@@ -12,7 +12,6 @@ struct OpenAtData {
     std::string pathname;
     int flags;
     int mode;
-    bool existed_before;
 };
 
 struct WriteData {
@@ -149,6 +148,13 @@ struct Getdents64Data {
     std::vector<Getdents64Entry> entries;
 };
 
+struct CopyFileRangeData {
+    unsigned int fd_in;
+    unsigned int fd_out;
+    size_t len;
+    unsigned int flags;
+};
+
 using SyscallArgs = std::variant<
     std::monostate,
     OpenAtData,
@@ -172,7 +178,8 @@ using SyscallArgs = std::variant<
     ReadData,
     SendToData,
     ConnectData,
-    Getdents64Data
+    Getdents64Data,
+    CopyFileRangeData
 >;
 
 struct SyscallEvent {

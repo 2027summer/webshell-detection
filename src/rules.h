@@ -426,6 +426,25 @@ inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) 
         }
     }
 
+    if (event.syscall_index == SYS_copy_file_range) {
+        if (!event.retval.has_value() || *event.retval <= 0) {
+            return NO_TRANSITION;
+        }
+
+        const auto* args = std::get_if<CopyFileRangeData>(&event.args);
+        if (!args) return NO_TRANSITION;
+
+        if (static_cast<long>(args->fd_in) != data->fd) {
+            return NO_TRANSITION;
+        }
+
+        data->bytes += *event.retval;
+        if (data->bytes < 30000) {
+            return static_cast<int>(state.current_state_index);
+        }
+        return static_cast<int>(state.current_state_index + 1);
+    }
+
     if (event.syscall_index != SYS_read && event.syscall_index != SYS_pread64) {
         return NO_TRANSITION;
     }

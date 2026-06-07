@@ -52,6 +52,7 @@ namespace engine {
             case SYS_dup2: return "dup2";
             case SYS_close: return "close";
             case SYS_getdents64: return "getdents64";
+            case SYS_copy_file_range: return "copy_file_range";
             default: return "unknown";
         }
     }
@@ -281,6 +282,11 @@ namespace engine {
 
         if (const auto* args = std::get_if<Getdents64Data>(&event.args)) {
             fprintf(stderr, "    fd=%u count=%u entries=%zu\n", args->fd, args->count, args->entries.size());
+            return;
+        }
+
+        if (const auto* args = std::get_if<CopyFileRangeData>(&event.args)) {
+            fprintf(stderr, "    fd_in=%u fd_out=%u len=%zu flags=%u\n", args->fd_in, args->fd_out, args->len, args->flags);
             return;
         }
     }
@@ -783,6 +789,13 @@ namespace engine {
             }
             case SYS_getdents64: {
                 auto args = parse_getdents64(pid, info);
+                if (args.has_value()) {
+                    event.args = *args;
+                }
+                break;
+            }
+            case SYS_copy_file_range: {
+                auto args = parse_copy_file_range(pid, info);
                 if (args.has_value()) {
                     event.args = *args;
                 }
