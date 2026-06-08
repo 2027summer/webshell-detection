@@ -14,14 +14,14 @@ src/codegen_rules.h
 __pycache__
 rules.yaml
 results*/
-data/
+# data/
 rules/
 plan/
 test-results/
 venv/
 
 ./tests
-*.yaml
+# *.yaml
 !rules.example.yaml
 playground/
 *.json

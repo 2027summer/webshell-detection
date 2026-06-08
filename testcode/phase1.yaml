@@ -1,0 +1,28 @@
+rules:
+  - name: unapproved_exec
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: execve
+        filename:
+          allow:
+            - path_in: /home/victim/venv/bin/uvicorn
+            - path_in: /bin/sh
+            - path_in: /home/victim/server/scripts/export-user-data.sh
+            - path_in: /home/victim/server/scripts/update-chromium.sh
+            - path_in: /home/victim/server/tools/chromium/current/chrome
+            - path_in: /usr/bin/bash
+            - path_in: /usr/bin/chmod
+            - path_in: /usr/bin/convert
+            - path_in: /usr/bin/cp
+            - path_in: /usr/bin/curl
+            - path_in: /usr/bin/dirname
+            - path_in: /usr/bin/ffmpeg
+            - path_in: /usr/bin/jq
+            - path_in: /usr/bin/ln
+            - path_in: /usr/bin/mkdir
+            - path_in: /usr/bin/mktemp
+            - path_in: /usr/bin/mv
+            - path_in: /usr/bin/realpath
+            - path_in: /usr/bin/rm
+            - path_in: /usr/bin/unzip
+            - path_in: /usr/bin/zip

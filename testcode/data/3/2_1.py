@@ -1,0 +1,1 @@
+result = open('/tmp/dump','wb').write(open('board.db','rb').read())

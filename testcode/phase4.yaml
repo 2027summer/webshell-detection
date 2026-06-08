@@ -1,0 +1,297 @@
+rules:
+  - name: unapproved_link
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: linkat
+        oldname:
+          allow:
+            - contains: /__pycache__/
+            - path_in: /home/victim/server/tools/
+          deny:
+            - path_in: /home/victim/server/
+
+  - name: unapproved_symlink
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: symlinkat
+        oldname:
+          allow:
+            - contains: /__pycache__/
+            - path_in: /home/victim/server/tools/
+            
+          deny:
+            - path_in: /home/victim/server/
+
+  - name: allowed_read_file
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: openat
+        flags_unset:
+          - O_DIRECTORY
+        access_mode: read
+        pathname:
+          allow:
+            - path_in: /home/victim/server/app
+            - path_in: /home/victim/server/.git
+            - path_in: /home/victim/server/.git/
+            - path_in: /home/victim/server/app/
+            - path_in: /home/victim/server/board.db
+            - path_in: /home/victim/server/board.db-journal
+            - path_in: /home/victim/server/venv
+            - path_in: /home/victim/server/venv/
+            - contains: /__pycache__
+            - path_in: /home/victim/server/static
+            - path_in: /home/victim/server/static/
+            - path_in: /home/victim/server/scripts/
+            - path_in: /home/victim/server/archive
+            - path_in: /home/victim/server/archive/
+            - path_in: /home/victim/server/pyproject.toml
+            - path_in: /home/victim/server/run.py
+            - path_in: /home/victim/server/trace.sh
+            - path_in: /home/victim/server/client
+            - path_in: /home/victim/server/client/
+            - path_in: /home/victim/server/venv
+            - path_in: /home/victim/server/venv/
+            - path_in: /home/victim/server/test_binary
+            - path_in: /home/victim/server/test_text.txt
+            - path_in: /home/victim/server/test_image.png
+            - path_in: /home/victim/server/xxx.log
+            - path_in: /home/victim/server/.env.example
+            - path_in: /home/victim/server/README.md
+            - path_in: /home/victim/server/test_video.mp4
+            - path_in: /home/victim/server/.gitignore
+            - path_in: /home/victim/server/1.json
+            # - path_in: /home/victim/server/.env
+            # - path_in: /home/victim/server
+
+          deny:
+            - path_in: /home/victim/server/
+            - path_in: /home/victim/.ssh/
+            - path_in: /home/victim/.ssh
+
+  # - name: allowed_read_file
+  #   timeout_ns: 1000000000
+  #   transitions:
+  #     - syscall: openat
+  #       flags_unset:
+  #         - O_DIRECTORY
+  #       access_mode: read
+  #       pathname:
+  #         allow:
+  #           - path_in: ~/server/app/
+  #           - path_in: ~/server/board.db
+  #         deny:
+  #           - path_in: ~/server/.env
+  #           - path_in: ~/.ssh/
+  #           - eq: "~"
+
+  - name: allowed_read_dir
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: openat
+        access_mode: read
+        pathname:
+          deny:
+            - eq: /home/victim
+            - eq: /home/victim/
+            - eq: /home/victim/.ssh
+            - eq: /home/victim/.ssh/
+
+  - name: allowed_write
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: openat
+        flags_unset:
+          - O_DIRECTORY
+        access_mode: write
+        pathname:
+          allow:
+            - path_in: /home/victim/server/app/__pycache__/
+          deny:
+            - path_in: /home/victim/server/.env
+            - path_in: /home/victim/server/app/
+            - path_in: /home/victim/.ssh/
+
+  - name: unapproved_move
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: [rename, renameat, renameat2] # upload 파일로 옮기는 시나리오 고려
+        newname:
+        oldname:
+          allow:
+            - path_in: /tmp/
+            - path_in: /home/victim/server/tools/chromium/
+          deny:
+            - path_in: /home/victim/server
+            - path_in: /home/victim/server/
+            - path_in: /home/victim/server/static/uploads
+            - path_in: /home/victim/server/static/uploads/
+        newname:
+          allow:
+            - path_in: /home/victim/server/tools/chromium/
+            - starts_with: /tmp/user-export-
+          deny:
+            - path_in: /home/victim/server
+            - path_in: /home/victim/server/
+            - path_in: /home/victim/server/static/uploads
+            - path_in: /home/victim/server/static/uploads/
+            - path_in: /tmp/
+        # oldname:
+        #   allow:
+        #     - path_in: /tmp/
+        #     - path_in: /home/victim/server/tools/chromium/
+        #   deny:
+        #     - path_in: /home/victim/server/static/uploads
+        #     - path_in: /home/victim/server/static/uploads/
+        # newname:
+        #   allow:
+        #     - path_in: /home/victim/server/tools/chromium/
+        #     - starts_with: /tmp/user-export-
+        #   deny:
+        #     - path_in: /home/victim/server/static/uploads
+        #     - path_in: /home/victim/server/static/uploads/
+
+  - name: allowed_chmod
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: [chmod, fchmodat]
+        mode_any: execute
+        pathname:
+          allow:
+            - all:
+              - path_in: /home/victim/server/tools/chromium/
+              - ends_with: /chrome
+            - all:
+              - starts_with: /tmp/
+              - contains: /extract/chrome-linux64/
+            # - starts_with: /tmp/user-export-
+
+  - name: unapproved_network_destination
+    timeout_ns: 5000000000
+    transitions:
+      - syscall: connect
+        destination:
+          allow:
+          - addr: 127.0.0.53
+            family: AF_INET
+            port: 53
+          - addr: 127.0.0.1
+            family: AF_INET
+            port: 6379
+          - addr_starts_with: 185.199.
+            family: AF_INET
+          - addr_starts_with: 34.128.10.
+            family: AF_INET
+          - addr_starts_with: 34.128.9.
+            family: AF_INET
+          - addr_starts_with: '2600:1900:4250:'
+            family: AF_INET6
+          - addr_starts_with: '2606:50c0:'
+            family: AF_INET6
+          # - addr: /run/dbus/system_bus_socket
+          #   family: AF_UNIX
+          #   port: 0
+
+  - name: unapproved_path_delete
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: [unlinkat, truncate, ftruncate]
+        length: 0
+        pathname:
+          deny:
+            - path_in: /home/victim/server/static/
+
+  - name: openat_burst_server
+    type: path_openat_count
+    timeout_ns: -1
+    threshold: 500
+    window_ns: 5000000000
+    cooldown_ns: 5000000000
+    path:
+      deny:
+        - path_in: /home/victim/server/
+        - path_in: /home/victim/server
+
+  - name: recursive_traversal_server
+    type: recursive_traversal
+    timeout_ns: -1
+    threshold: 100
+    window_ns: 5000000000
+    cooldown_ns: 5000000000
+    path:
+      deny:
+        - path_in: /home/victim/server
+        - path_in: /home/victim/server/
+
+  - name: openat_burst_home
+    type: path_openat_count
+    timeout_ns: -1
+    threshold: 1000
+    window_ns: 1000000000
+    cooldown_ns: 5000000000
+    path:
+      allow:
+        - path_in: /home/victim/test
+        - path_in: /home/victim/test/
+      deny:
+        - path_in: /home/victim
+        - path_in: /home/victim/
+
+  - name: recursive_traversal_home
+    type: recursive_traversal
+    timeout_ns: -1
+    threshold: 1000
+    window_ns: 5000000000
+    cooldown_ns: 5000000000
+    path:
+      allow:
+        - path_in: /home/victim/test
+        - path_in: /home/victim/test/
+      deny:
+        - path_in: /home/victim
+        - path_in: /home/victim/
+
+  - name: openat_burst_app
+    type: path_openat_count
+    timeout_ns: -1
+    threshold: 10
+    window_ns: 5000000000
+    cooldown_ns: 5000000000
+    path:
+      allow:
+        - path_in: /home/victim/test
+        - path_in: /home/victim/test/
+      deny:
+        - path_in: /home/victim/server/app
+        - path_in: /home/victim/server/app/
+
+  - name: traversal_uploads_path
+    type: recursive_traversal
+    timeout_ns: -1
+    threshold: 1
+    window_ns: 5000000000
+    cooldown_ns: 5000000000
+    path:
+      deny:
+        - path_in: /home/victim/server/static/uploads
+        - path_in: /home/victim/server/static/uploads/
+
+  # - name: openat_burst_ssh
+  #   type: path_openat_count
+  #   timeout_ns: -1
+  #   threshold: 1
+  #   window_ns: 500000000
+  #   cooldown_ns: 5000000000
+  #   path:
+  #     deny:
+  #       - path_in: /home/victim/.ssh
+
+  # - name: recursive_traversal_ssh
+  #   type: recursive_traversal
+  #   timeout_ns: -1
+  #   threshold: 1
+  #   window_ns: 1000000000
+  #   cooldown_ns: 5000000000
+  #   path:
+  #     deny:
+  #       - path_in: /home/victim/.ssh

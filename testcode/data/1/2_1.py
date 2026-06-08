@@ -1,0 +1,1 @@
+result = open('.env').read()

