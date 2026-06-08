@@ -579,10 +579,37 @@ namespace engine {
         event.from_shell = true;
     }
 
-    void Engine::handle_exec_stop(pid_t pid) {
+    void Engine::handle_exec_stop(pid_t pid, pid_t old_pid) {
+        auto is_pending_exec = [](const std::optional<SyscallEvent>& event) {
+            return event.has_value() &&
+                   !event->retval.has_value() &&
+                   (event->syscall_index == SYS_execve || event->syscall_index == SYS_execveat);
+        };
+
         auto it = tracked_pids.find(pid);
-        if (it == tracked_pids.end() || !it->second.has_value()) {
-            return;
+        if (it == tracked_pids.end() || !is_pending_exec(it->second)) {
+            if (old_pid == 0 || old_pid == pid) {
+                return;
+            }
+
+            auto old_it = tracked_pids.find(old_pid);
+            if (old_it == tracked_pids.end() || !is_pending_exec(old_it->second)) {
+                return;
+            }
+
+            fprintf(stderr, "[DEBUG] exec pid remap: old=%d new=%d\n", old_pid, pid);
+            tracked_pids[pid] = old_it->second;
+            tracked_pids.erase(old_it);
+            if (from_shell_pids.contains(old_pid)) {
+                from_shell_pids.insert(pid);
+            }
+            if (allow_pids.contains(old_pid)) {
+                allow_pids.insert(pid);
+            }
+            from_shell_pids.erase(old_pid);
+            allow_pids.erase(old_pid);
+            cooldown_until.erase(old_pid);
+            it = tracked_pids.find(pid);
         }
 
         auto& event = *it->second;
@@ -594,6 +621,7 @@ namespace engine {
             return;
         }
 
+        event.pid = pid;
         event.retval = 0;
         event.timestamp_ns = monotonic_time_ns();
         process_event(event);

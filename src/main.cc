@@ -87,9 +87,12 @@ int main(int argc, char **argv) {
         } else if (sig == SIGTRAP && event != 0) {
             // fork가 발생한 경우 새로운 pid를 추적 대상에 포함
             switch (event) {
-                case PTRACE_EVENT_EXEC:
-                    engine.handle_exec_stop(pid);
+                case PTRACE_EVENT_EXEC: {
+                    unsigned long old_pid = 0;
+                    ptrace(PTRACE_GETEVENTMSG, pid, nullptr, &old_pid);
+                    engine.handle_exec_stop(pid, static_cast<pid_t>(old_pid));
                     break;
+                }
                 case PTRACE_EVENT_FORK:
                 case PTRACE_EVENT_VFORK:
                 case PTRACE_EVENT_CLONE: {
