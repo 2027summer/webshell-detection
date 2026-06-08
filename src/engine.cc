@@ -580,20 +580,20 @@ namespace engine {
     }
 
     void Engine::handle_exec_stop(pid_t pid, pid_t old_pid) {
-        auto is_pending_exec = [](const std::optional<SyscallEvent>& event) {
-            return event.has_value() &&
-                   !event->retval.has_value() &&
-                   (event->syscall_index == SYS_execve || event->syscall_index == SYS_execveat);
-        };
-
         auto it = tracked_pids.find(pid);
-        if (it == tracked_pids.end() || !is_pending_exec(it->second)) {
+        if (it == tracked_pids.end() ||
+            !it->second.has_value() ||
+            it->second->retval.has_value() ||
+            (it->second->syscall_index != SYS_execve && it->second->syscall_index != SYS_execveat)) {
             if (old_pid == 0 || old_pid == pid) {
                 return;
             }
 
             auto old_it = tracked_pids.find(old_pid);
-            if (old_it == tracked_pids.end() || !is_pending_exec(old_it->second)) {
+            if (old_it == tracked_pids.end() ||
+                !old_it->second.has_value() ||
+                old_it->second->retval.has_value() ||
+                (old_it->second->syscall_index != SYS_execve && old_it->second->syscall_index != SYS_execveat)) {
                 return;
             }
 

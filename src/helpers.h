@@ -1,6 +1,5 @@
 #pragma once
 
-#include <csignal>
 #include <cstdio>
 #include <fcntl.h>
 #include <filesystem>
@@ -146,31 +145,6 @@ namespace engine {
             }
         }
         return std::nullopt;
-    }
-
-    inline std::vector<std::string> split_env_paths(const std::string& value) {
-        std::vector<std::string> paths;
-        size_t start = 0;
-        for (size_t i = 0; i <= value.size(); i++) {
-            if (i != value.size() && value[i] != ':' && value[i] != ' ') {
-                continue;
-            }
-            if (i > start) {
-                paths.push_back(value.substr(start, i - start));
-            }
-            start = i + 1;
-        }
-        return paths;
-    }
-
-    inline std::optional<std::string> get_env_path(pid_t pid, const std::string& path) {
-        if (path.empty()) {
-            return std::nullopt;
-        }
-        if (path.find('/') == std::string::npos) {
-            return path;
-        }
-        return get_execve_path(pid, path);
     }
 
     inline std::optional<std::string> get_execveat_path(pid_t pid, int dirfd, const std::string& path) {
