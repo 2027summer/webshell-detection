@@ -378,23 +378,23 @@ struct ReadDbLargeState {
 
 inline int step_openat_db(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     if (!event.retval.has_value() || *event.retval < 0) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 
     if ((args->flags & O_ACCMODE) == O_WRONLY) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     auto path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!path.has_value() || !is_db_file_path(*path)) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     state.data = ReadDbLargeState {
@@ -409,33 +409,84 @@ inline int step_openat_db(DetectionState& state, const SyscallEvent& event) {
 inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) {
     auto* data = std::any_cast<ReadDbLargeState>(&state.data);
     if (!data) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     if (event.syscall_index == SYS_dup2) {
         if (!event.retval.has_value() || *event.retval < 0) {
-            return NO_TRANSITION;
+            return NO_MATCH;
         }
 
         const auto* args = std::get_if<Dup2Data>(&event.args);
-        if (!args) return NO_TRANSITION;
+        if (!args) return NO_MATCH;
 
         if (static_cast<long>(args->oldfd) == data->fd) {
             data->fd = args->newfd;
-            return static_cast<int>(state.current_state_index);
+            return static_cast<int>(state.current_state_index + 1);
         }
     }
 
     if (event.syscall_index == SYS_copy_file_range) {
         if (!event.retval.has_value() || *event.retval <= 0) {
-            return NO_TRANSITION;
+            return NO_MATCH;
         }
 
         const auto* args = std::get_if<CopyFileRangeData>(&event.args);
-        if (!args) return NO_TRANSITION;
+        if (!args) return NO_MATCH;
 
         if (static_cast<long>(args->fd_in) != data->fd) {
-            return NO_TRANSITION;
+            return NO_MATCH;
+        }
+
+        data->bytes += *event.retval;
+        if (data->bytes < 30000) {
+            return static_cast<int>(state.current_state_index);
+        }
+        return static_cast<int>(state.current_state_index + 2);
+    }
+
+    if (event.syscall_index != SYS_read && event.syscall_index != SYS_pread64) {
+        return NO_MATCH;
+    }
+
+    if (!event.retval.has_value() || *event.retval <= 0) {
+        return NO_MATCH;
+    }
+
+    const auto* args = std::get_if<ReadData>(&event.args);
+    if (!args) return NO_MATCH;
+
+    if (static_cast<long>(args->fd) != data->fd) {
+        return NO_MATCH;
+    }
+
+    // if (!fd_points_to_path(event.pid, args->fd, data->path)) {
+    //     return NO_MATCH;
+    // }
+
+    data->bytes += *event.retval;
+    if (data->bytes < 30000) {
+        return static_cast<int>(state.current_state_index);
+    }
+    return static_cast<int>(state.current_state_index + 2);
+}
+
+inline int step_read_db_large_dup2(DetectionState& state, const SyscallEvent& event) {
+    auto* data = std::any_cast<ReadDbLargeState>(&state.data);
+    if (!data) {
+        return NO_MATCH;
+    }
+
+    if (event.syscall_index == SYS_copy_file_range) {
+        if (!event.retval.has_value() || *event.retval <= 0) {
+            return NO_MATCH;
+        }
+
+        const auto* args = std::get_if<CopyFileRangeData>(&event.args);
+        if (!args) return NO_MATCH;
+
+        if (static_cast<long>(args->fd_in) != data->fd) {
+            return NO_MATCH;
         }
 
         data->bytes += *event.retval;
@@ -446,22 +497,22 @@ inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) 
     }
 
     if (event.syscall_index != SYS_read && event.syscall_index != SYS_pread64) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     if (!event.retval.has_value() || *event.retval <= 0) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     const auto* args = std::get_if<ReadData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 
     if (static_cast<long>(args->fd) != data->fd) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     // if (!fd_points_to_path(event.pid, args->fd, data->path)) {
-    //     return NO_TRANSITION;
+    //     return NO_MATCH;
     // }
 
     data->bytes += *event.retval;
@@ -473,19 +524,19 @@ inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) 
 
 inline int step_execve_grep_recursive(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 
     if (args->filename != "/usr/bin/grep") {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     size_t argc = args->argv.size();
     if (argc < 2) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 
     static const char* deny_options[] = {
@@ -511,7 +562,7 @@ inline int step_execve_grep_recursive(DetectionState& state, const SyscallEvent&
         }
     }
 
-    return NO_TRANSITION;
+    return NO_MATCH;
 }
 
 
@@ -528,7 +579,8 @@ inline void register_rules(engine::Engine& engine) {
         .timeout_ns = 500000000UL,
         .transitions = {
             detection_rules::step_openat_db,
-            detection_rules::step_read_db_large
+            detection_rules::step_read_db_large,
+            detection_rules::step_read_db_large_dup2
         },
     });
     // engine.add_rule((DetectionRule) {

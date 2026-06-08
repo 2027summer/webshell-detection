@@ -455,7 +455,7 @@ namespace engine {
 
             // fprintf(stderr, "[DEBUG] check id: %lu current_state_index: %lu\n", state.id, current_state_index);
             int next_state_index = this->rules[rule_index].transitions[state.current_state_index](state, event);
-            if (next_state_index == NO_TRANSITION) {
+            if (next_state_index == NO_MATCH) {
                 continue;
             }
 
@@ -499,7 +499,7 @@ namespace engine {
             next_state.data = std::any();
 
             int next_state_index = this->rules[rule_index].transitions[0](next_state, event);
-            if (next_state_index == NO_TRANSITION) {
+            if (next_state_index == NO_MATCH) {
                 continue;
             }
 

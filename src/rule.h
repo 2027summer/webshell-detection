@@ -9,7 +9,7 @@ namespace engine {
 
 struct DetectionState;
 
-constexpr int NO_TRANSITION = -1;
+constexpr int NO_MATCH = -1;
 
 using TransitionFunc = int(*)(DetectionState&, const SyscallEvent&);
 

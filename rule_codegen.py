@@ -93,11 +93,6 @@ def gen_destination_match_cond(condition: dict, value: str = "args"):
 def condition_has_key(condition: dict, key: str):
     if key in condition:
         return True
-    # for nested_key in ["all", "any"]:
-    #     if nested_key in condition:
-    #         for cond in condition[nested_key]:
-    #             if condition_has_key(cond, key):
-    #                 return True
     if "all" in condition:
         for cond in condition["all"]:
             if condition_has_key(cond, key):
@@ -184,7 +179,7 @@ struct PathCountState {{
 }};
 
 struct RecursiveTraversalState {{
-    std::unordered_map<unsigned int, std::string> fd_paths;
+    unsigned int fd;
     std::unordered_set<std::string> paths;
 }};
 
@@ -219,15 +214,15 @@ inline void register_codegen_rules(engine::Engine& engine) {{
 def gen_execve(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_execve) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 
 """
 
@@ -236,7 +231,7 @@ def gen_execve(function_name: str, t: dict):
 
         body += "    auto filename_path = get_execve_path(event.pid, args->filename);\n"
         body += "    if (!filename_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -248,7 +243,7 @@ def gen_execve(function_name: str, t: dict):
         )
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "argv" in t and len(t["argv"]) > 0:
@@ -261,7 +256,7 @@ def gen_execve(function_name: str, t: dict):
 
         max_index = max(argv.keys())
         body += f"""    if (args->argv.size() < {max_index + 1}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -280,7 +275,7 @@ def gen_execve(function_name: str, t: dict):
 
             cond = " || ".join(l)
             body += f"    if (!({cond})) {{\n"
-            body += f"        return NO_TRANSITION;\n"
+            body += f"        return NO_MATCH;\n"
             body += f"    }}\n"
 
     if "find_name_keywords" in t and len(t["find_name_keywords"]) > 0:
@@ -303,7 +298,7 @@ def gen_execve(function_name: str, t: dict):
         }}
     }}
     if (flag_find_name_keywords == false) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -348,7 +343,7 @@ def gen_execve(function_name: str, t: dict):
         }}
     }}
     if (flag == false) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -360,19 +355,19 @@ def gen_execve(function_name: str, t: dict):
 def gen_openat(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
     if (!event.retval.has_value() || *event.retval < 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
     if "dirfd" in t:
         body += f"""    if (args->dirfd != {t["dirfd"]}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -380,12 +375,12 @@ def gen_openat(function_name: str, t: dict):
         assert(isinstance(t["from_shell"], bool))
         if t["from_shell"]:
             body += """    if (!event.from_shell) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
         else:
             body += """    if (event.from_shell) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
 
@@ -394,7 +389,7 @@ def gen_openat(function_name: str, t: dict):
 
         body += """    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!absolute_path.has_value()) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
         body += "\n"
@@ -405,7 +400,7 @@ def gen_openat(function_name: str, t: dict):
             "absolute_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "access_mode" in t:
@@ -413,18 +408,18 @@ def gen_openat(function_name: str, t: dict):
         assert(access_mode == "read" or access_mode == "write" or access_mode == "readonly")
         if access_mode == "read":
             body += """    if ((args->flags & O_ACCMODE) == O_WRONLY) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
         elif access_mode == "write":
             body += """    int access_mode = args->flags & O_ACCMODE;
     if (access_mode != O_WRONLY && access_mode != O_RDWR) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
         else:
             body += """    if ((args->flags & O_ACCMODE) != O_RDONLY) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
 
@@ -433,7 +428,7 @@ def gen_openat(function_name: str, t: dict):
         # if "O_RDONLY" in flags:
         for flag in flags:
             body += f"""    if (!((args->flags & {flag}) == {flag})) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -442,7 +437,7 @@ def gen_openat(function_name: str, t: dict):
         assert(isinstance(flags, list))
         for flag in flags:
             body += f"""    if ((args->flags & {flag}) == {flag}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -455,17 +450,17 @@ def gen_openat(function_name: str, t: dict):
 def gen_connect(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_connect) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || (*event.retval != 0 && *event.retval != -115)) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<ConnectData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
     if (args->port == 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
     fprintf(stderr, "> %s %d %d\\n", args->addr.c_str(), args->port, args->family);
 """
@@ -521,7 +516,7 @@ def gen_connect(function_name: str, t: dict):
 
         if len(skip_expr) > 0:
             body += f"    if ({skip_expr}) {{\n"
-            body += f"        return NO_TRANSITION;\n"
+            body += f"        return NO_MATCH;\n"
             body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
@@ -532,20 +527,20 @@ def gen_connect(function_name: str, t: dict):
 def gen_unlinkat(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_unlinkat) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<UnlinkAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "dfd" in t:
         body += f"""    if (args->dfd != {t["dfd"]}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -563,12 +558,12 @@ def gen_unlinkat(function_name: str, t: dict):
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             body += "    auto absolute_path = get_absolute_path_at(event.pid, args->dfd, args->pathname);\n"
             body += "    if (!absolute_path.has_value()) {\n"
-            body += "        return NO_TRANSITION;\n"
+            body += "        return NO_MATCH;\n"
             body += "    }\n"
             body += "\n"
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
@@ -579,15 +574,15 @@ def gen_unlinkat(function_name: str, t: dict):
 def gen_renameat2(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_renameat2) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<RenameAt2Data>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "oldname" in t:
@@ -606,7 +601,7 @@ def gen_renameat2(function_name: str, t: dict):
             body += "\n"
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "newname" in t:
@@ -614,7 +609,7 @@ def gen_renameat2(function_name: str, t: dict):
 
         body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -624,7 +619,7 @@ def gen_renameat2(function_name: str, t: dict):
             "newname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
@@ -636,15 +631,15 @@ def gen_renameat2(function_name: str, t: dict):
 def gen_rename(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_rename) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<RenameData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "oldname" in t:
@@ -652,7 +647,7 @@ def gen_rename(function_name: str, t: dict):
 
         body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
         body += "    if (!oldname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -662,7 +657,7 @@ def gen_rename(function_name: str, t: dict):
             "oldname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "newname" in t:
@@ -670,7 +665,7 @@ def gen_rename(function_name: str, t: dict):
 
         body += "    auto newname_path = get_absolute_path(event.pid, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -680,7 +675,7 @@ def gen_rename(function_name: str, t: dict):
             "newname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
@@ -692,26 +687,26 @@ def gen_rename(function_name: str, t: dict):
 def gen_renameat(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_renameat) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<RenameAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "oldfd" in t:
         body += f"""    if (args->oldfd != {t["oldfd"]}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
     if "newfd" in t:
         body += f"""    if (args->newfd != {t["newfd"]}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -720,7 +715,7 @@ def gen_renameat(function_name: str, t: dict):
 
         body += "    auto oldname_path = get_absolute_path_at(event.pid, args->oldfd, args->oldname);\n"
         body += "    if (!oldname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -730,7 +725,7 @@ def gen_renameat(function_name: str, t: dict):
             "oldname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "newname" in t:
@@ -738,7 +733,7 @@ def gen_renameat(function_name: str, t: dict):
 
         body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -748,7 +743,7 @@ def gen_renameat(function_name: str, t: dict):
             "newname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
@@ -760,15 +755,15 @@ def gen_renameat(function_name: str, t: dict):
 def gen_chmod(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_chmod) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<ChmodData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "pathname" in t:
@@ -776,7 +771,7 @@ def gen_chmod(function_name: str, t: dict):
 
         body += "    auto pathname_path = get_absolute_path(event.pid, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -786,14 +781,14 @@ def gen_chmod(function_name: str, t: dict):
             "pathname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "mode_any" in t:
         mode_any = t["mode_any"]
         assert(mode_any == "execute")
         body += """    if ((args->mode & 0111) == 0) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
 
@@ -806,20 +801,20 @@ def gen_chmod(function_name: str, t: dict):
 def gen_fchmodat(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_fchmodat) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<FchmodAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "dfd" in t:
         body += f"""    if (args->dfd != {t["dfd"]}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -828,7 +823,7 @@ def gen_fchmodat(function_name: str, t: dict):
 
         body += "    auto pathname_path = get_absolute_path_at(event.pid, args->dfd, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -838,14 +833,14 @@ def gen_fchmodat(function_name: str, t: dict):
             "pathname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "mode_any" in t:
         mode_any = t["mode_any"]
         assert(mode_any == "execute")
         body += """    if ((args->mode & 0111) == 0) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
 
@@ -858,15 +853,15 @@ def gen_fchmodat(function_name: str, t: dict):
 def gen_truncate(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_truncate) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<TruncateData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "pathname" in t:
@@ -874,7 +869,7 @@ def gen_truncate(function_name: str, t: dict):
 
         body += "    auto pathname_path = get_absolute_path(event.pid, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -884,12 +879,12 @@ def gen_truncate(function_name: str, t: dict):
             "pathname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "length" in t:
         body += f"""    if (args->length != {t["length"]}L) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -902,15 +897,15 @@ def gen_truncate(function_name: str, t: dict):
 def gen_ftruncate(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_ftruncate) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<FtruncateData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "pathname" in t:
@@ -918,7 +913,7 @@ def gen_ftruncate(function_name: str, t: dict):
 
         body += "    auto pathname_path = get_fd_path(event.pid, args->fd);\n"
         body += "    if (!pathname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -928,12 +923,12 @@ def gen_ftruncate(function_name: str, t: dict):
             "pathname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "length" in t:
         body += f"""    if (args->length != {t["length"]}L) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -945,22 +940,22 @@ def gen_ftruncate(function_name: str, t: dict):
 def gen_linkat(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_linkat) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<LinkAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "oldfd" in t:
         body += f"""    if (args->oldfd != {t["oldfd"]}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
     if "newfd" in t:
         body += f"""    if (args->newfd != {t["newfd"]}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -980,14 +975,14 @@ def gen_linkat(function_name: str, t: dict):
                 assert(False)
             if "oldfd" not in t:
                 body += """    if (args->oldfd != AT_FDCWD) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
             body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
             body += "\n"
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "newname" in t:
@@ -995,7 +990,7 @@ def gen_linkat(function_name: str, t: dict):
 
         body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -1005,7 +1000,7 @@ def gen_linkat(function_name: str, t: dict):
             "newname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
@@ -1016,16 +1011,16 @@ def gen_linkat(function_name: str, t: dict):
 def gen_symlinkat(function_name: str, t: dict):
     body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_symlinkat) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<SymlinkAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 """
 
     if "newdfd" in t:
         body += f"""    if (args->newdfd != {t["newdfd"]}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 """
 
@@ -1046,7 +1041,7 @@ def gen_symlinkat(function_name: str, t: dict):
 
             if "newdfd" not in t:
                 body += """    if (args->newdfd != AT_FDCWD) {
-        return NO_TRANSITION;
+        return NO_MATCH;
     }
 """
             body += """    std::optional<std::string> oldname_path;
@@ -1057,7 +1052,7 @@ def gen_symlinkat(function_name: str, t: dict):
         auto newname_path = get_absolute_path(event.pid, args->newname);
 
         if (!newname_path.has_value()) {
-            return NO_TRANSITION;
+            return NO_MATCH;
         }
 
         std::string newname_dir = fs::path(*newname_path).parent_path().string();
@@ -1067,7 +1062,7 @@ def gen_symlinkat(function_name: str, t: dict):
 """
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     if "newname" in t:
@@ -1075,7 +1070,7 @@ def gen_symlinkat(function_name: str, t: dict):
 
         body += "    auto newname_path = get_absolute_path_at(event.pid, args->newdfd, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
-        body += "        return NO_TRANSITION;\n"
+        body += "        return NO_MATCH;\n"
         body += "    }\n"
         body += "\n"
 
@@ -1085,7 +1080,7 @@ def gen_symlinkat(function_name: str, t: dict):
             "newname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return NO_TRANSITION;\n"
+        body += f"        return NO_MATCH;\n"
         body += f"    }}\n"
 
     body += "    return static_cast<int>(state.current_state_index + 1);\n"
@@ -1181,69 +1176,70 @@ def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
 inline int {function_names[1]}(DetectionState& state, const SyscallEvent& event) {{
     auto* data = std::any_cast<RecursiveTraversalState>(&state.data);
     if (!data) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (event.syscall_index == SYS_openat) {{
         if (!event.retval.has_value() || *event.retval < 0) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
 
         const auto* args = std::get_if<OpenAtData>(&event.args);
-        if (!args) return NO_TRANSITION;
+        if (!args) return NO_MATCH;
 
         auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
         if (!absolute_path.has_value()) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
 
         if ({path_skip_expr}) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
 
-        data->fd_paths[static_cast<unsigned int>(*event.retval)] = *absolute_path;
+        data->fd = static_cast<unsigned int>(*event.retval);
 
-        return static_cast<int>(state.current_state_index - 1);
+        return static_cast<int>(state.current_state_index);
     }}
 
     if (event.syscall_index == SYS_close) {{
         if (!event.retval.has_value() || *event.retval != 0) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
 
         const auto* args = std::get_if<CloseData>(&event.args);
-        if (!args) return NO_TRANSITION;
+        if (!args) return NO_MATCH;
 
-        data->fd_paths.erase(args->fd);
+        if (args->fd == data->fd) {{
+            return static_cast<int>(state.current_state_index - 1);
+        }}
 
         return static_cast<int>(state.current_state_index);
     }}
 
     if (event.syscall_index != SYS_getdents64) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval <= 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<Getdents64Data>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
 
-    auto fd_it = data->fd_paths.find(args->fd);
-    if (fd_it == data->fd_paths.end()) {{
-        return NO_TRANSITION;
+    if (args->fd != data->fd) {{
+        return NO_MATCH;
     }}
 
     auto fd_path = get_fd_path(event.pid, args->fd);
     if (!fd_path.has_value()) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     data->paths.insert(*fd_path);
 
     if (static_cast<long>(data->paths.size()) < {threshold}L) {{
-        return static_cast<int>(state.current_state_index);
+        return static_cast<int>(state.current_state_index - 1);
     }}
 
     return static_cast<int>(state.current_state_index + 1);
@@ -1258,26 +1254,26 @@ def gen_path_openat_count(name: str, function_name: str, rule: dict):
 
     return f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval < 0) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return NO_TRANSITION;
+    if (!args) return NO_MATCH;
     if ((args->flags & O_DIRECTORY) == O_DIRECTORY) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!absolute_path.has_value()) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if ({path_skip_expr}) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!state.data.has_value()) {{
@@ -1286,7 +1282,7 @@ def gen_path_openat_count(name: str, function_name: str, rule: dict):
 
     auto* data = std::any_cast<PathCountState>(&state.data);
     if (!data) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     data->paths.insert(*absolute_path);
@@ -1392,19 +1388,19 @@ def gen_exec_argv_setup(command_paths: list[str]):
 
     if (event.syscall_index == SYS_execve) {{
         const auto* args = std::get_if<ExecveData>(&event.args);
-        if (!args) return NO_TRANSITION;
+        if (!args) return NO_MATCH;
         exec_path = get_execve_path(event.pid, args->filename);
         argv = args->argv;
     }} else {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0 || !exec_path.has_value()) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     if (!({command_cond})) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
 """
@@ -1425,7 +1421,7 @@ def gen_cp_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && (arg == "--help" || arg == "--version")) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
         if (!end_options && arg == "--") {{
             end_options = true;
@@ -1436,7 +1432,7 @@ def gen_cp_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && arg == "--target-directory") {{
-            if (i + 1 >= argv.size()) return NO_TRANSITION;
+            if (i + 1 >= argv.size()) return NO_MATCH;
             target_directory = argv[++i];
             continue;
         }}
@@ -1445,12 +1441,12 @@ def gen_cp_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && arg == "-t") {{
-            if (i + 1 >= argv.size()) return NO_TRANSITION;
+            if (i + 1 >= argv.size()) return NO_MATCH;
             target_directory = argv[++i];
             continue;
         }}
         if (!end_options && (arg == "-S" || arg == "--suffix")) {{
-            if (i + 1 >= argv.size()) return NO_TRANSITION;
+            if (i + 1 >= argv.size()) return NO_MATCH;
             i++;
             continue;
         }}
@@ -1476,11 +1472,11 @@ def gen_cp_path_policy(function_name: str, rule: dict):
     std::vector<std::string> sources;
     std::optional<std::string> destination;
     if (target_directory.has_value()) {{
-        if (paths.empty()) return NO_TRANSITION;
+        if (paths.empty()) return NO_MATCH;
         sources = paths;
         destination = *target_directory;
     }} else {{
-        if (paths.size() < 2) return NO_TRANSITION;
+        if (paths.size() < 2) return NO_MATCH;
         sources.assign(paths.begin(), paths.end() - 1);
         destination = paths.back();
     }}
@@ -1488,7 +1484,7 @@ def gen_cp_path_policy(function_name: str, rule: dict):
     for (const auto& source : sources) {{
         auto source_path = get_execve_path(event.pid, source);
         if (!source_path.has_value()) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
         if (!({source_allow})) {{
             return static_cast<int>(state.current_state_index + 1);
@@ -1497,13 +1493,13 @@ def gen_cp_path_policy(function_name: str, rule: dict):
 
     auto destination_path = get_execve_path(event.pid, *destination);
     if (!destination_path.has_value()) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
     if (!({destination_allow})) {{
         return static_cast<int>(state.current_state_index + 1);
     }}
 
-    return NO_TRANSITION;
+    return NO_MATCH;
 }}
 """
 
@@ -1526,10 +1522,10 @@ def gen_zip_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && (arg == "--help" || arg == "--version")) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
         if (!end_options && (arg == "-b" || arg == "-t" || arg == "-n")) {{
-            if (i + 1 >= argv.size()) return NO_TRANSITION;
+            if (i + 1 >= argv.size()) return NO_MATCH;
             i++;
             continue;
         }}
@@ -1550,12 +1546,12 @@ def gen_zip_path_policy(function_name: str, rule: dict):
     }}
 
     if (paths.size() < 2) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     auto archive_path = get_execve_path(event.pid, paths[0]);
     if (!archive_path.has_value()) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
     if (!({archive_allow})) {{
         return static_cast<int>(state.current_state_index + 1);
@@ -1564,14 +1560,14 @@ def gen_zip_path_policy(function_name: str, rule: dict):
     for (size_t i = 1; i < paths.size(); i++) {{
         auto input_path = get_execve_path(event.pid, paths[i]);
         if (!input_path.has_value()) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
         if (!({input_allow})) {{
             return static_cast<int>(state.current_state_index + 1);
         }}
     }}
 
-    return NO_TRANSITION;
+    return NO_MATCH;
 }}
 """
 
@@ -1606,7 +1602,7 @@ def gen_tar_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && (arg == "--help" || arg == "--version")) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
         if (!end_options && arg == "--create") {{
             create = true;
@@ -1621,7 +1617,7 @@ def gen_tar_path_policy(function_name: str, rule: dict):
             bool file_option = arg.starts_with("--file");
             std::string value;
             if (arg == "--file" || arg == "--directory") {{
-                if (i + 1 >= argv.size()) return NO_TRANSITION;
+                if (i + 1 >= argv.size()) return NO_MATCH;
                 value = argv[++i];
             }} else if (file_option) {{
                 value = arg.substr(7);
@@ -1643,7 +1639,7 @@ def gen_tar_path_policy(function_name: str, rule: dict):
             arg == "--use-compress-program" ||
             arg == "--files-from"
         )) {{
-            if (i + 1 >= argv.size()) return NO_TRANSITION;
+            if (i + 1 >= argv.size()) return NO_MATCH;
             i++;
             continue;
         }}
@@ -1672,7 +1668,7 @@ def gen_tar_path_policy(function_name: str, rule: dict):
                     if (!old_style_options && j + 1 < arg.size()) {{
                         archive = arg.substr(j + 1);
                     }} else {{
-                        if (i + 1 >= argv.size()) return NO_TRANSITION;
+                        if (i + 1 >= argv.size()) return NO_MATCH;
                         archive = argv[++i];
                     }}
                     break;
@@ -1681,14 +1677,14 @@ def gen_tar_path_policy(function_name: str, rule: dict):
                     if (!old_style_options && j + 1 < arg.size()) {{
                         set_directory(arg.substr(j + 1));
                     }} else {{
-                        if (i + 1 >= argv.size()) return NO_TRANSITION;
+                        if (i + 1 >= argv.size()) return NO_MATCH;
                         set_directory(argv[++i]);
                     }}
                     break;
                 }}
                 if (!old_style_options && (opt == 'T' || opt == 'X' || opt == 'I')) {{
                     if (j + 1 >= arg.size()) {{
-                        if (i + 1 >= argv.size()) return NO_TRANSITION;
+                        if (i + 1 >= argv.size()) return NO_MATCH;
                         i++;
                     }}
                     break;
@@ -1701,12 +1697,12 @@ def gen_tar_path_policy(function_name: str, rule: dict):
     }}
 
     if (!create || !archive.has_value() || inputs.empty()) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
 
     auto archive_path = get_execve_path(event.pid, *archive);
     if (!archive_path.has_value()) {{
-        return NO_TRANSITION;
+        return NO_MATCH;
     }}
     if (!({archive_allow})) {{
         return static_cast<int>(state.current_state_index + 1);
@@ -1719,19 +1715,19 @@ def gen_tar_path_policy(function_name: str, rule: dict):
         }} else {{
             auto directory_path = get_execve_path(event.pid, *input_directories[i]);
             if (!directory_path.has_value()) {{
-                return NO_TRANSITION;
+                return NO_MATCH;
             }}
             input_path = get_execve_path(event.pid, *directory_path + "/" + inputs[i]);
         }}
         if (!input_path.has_value()) {{
-            return NO_TRANSITION;
+            return NO_MATCH;
         }}
         if (!({input_allow})) {{
             return static_cast<int>(state.current_state_index + 1);
         }}
     }}
 
-    return NO_TRANSITION;
+    return NO_MATCH;
 }}
 """
 
@@ -1768,15 +1764,15 @@ def gen_transition(function_name: str, t: dict):
             function_names.append(sub_function_name)
 
         body += f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
-    int ret = NO_TRANSITION;
+    int ret = NO_MATCH;
 """
         for sub_function_name in function_names:
             body += f"""    ret = {sub_function_name}(state, event);
-    if (ret != NO_TRANSITION) {{
+    if (ret != NO_MATCH) {{
         return ret;
     }}
 """
-        body += "    return NO_TRANSITION;\n"
+        body += "    return NO_MATCH;\n"
         body += "}\n"
         return body
 
