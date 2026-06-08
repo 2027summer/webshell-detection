@@ -25,9 +25,7 @@ install -d -o "$user" -g "$user" \
 
 cat /home/ubuntu/victim_ed25519 > "$home/.ssh/authorized_keys"
 
-for i in $(seq 1 40); do
-    printf 'file %s\n' "$i" > "$home/dummy/file_$i.txt"
-done
+python3 scripts/create_dummy_tree.py
 
 if [ -x obj/main ]; then
     cp obj/main "$home/bin/detection"
@@ -42,9 +40,15 @@ chown -R "$user:$user" "$home/.ssh"
 chown -R "$user:$user" "$home/server"
 chmod 0700 "$home/.ssh"
 chmod 0600 "$home/.ssh/authorized_keys"
-# chmod 0600 "$home/.ssh/id_rsa"
-
+cd $home
+unzip /home/ubuntu/test/test.zip
+chown -R "$user:$user" "$home/test"
 git clone https://github.com/2027summer/board "$home/server"
+chown -R "$user:$user" "$home/server"
+echo "SESSION_SECRET_KEY=GUOZzX0239PkTfS-Mws2VMRsN0aaYgF7iqdMnoUmZxI
+DEFAULT_ADMIN_EMAIL=admin@example.com
+DEFAULT_ADMIN_USERNAME=관리자
+DEFAULT_ADMIN_PASSWORD=admin1234" > "$home/server/.env"
 
 python3 -m venv "$home/server/venv"
 cd "$home/server"
