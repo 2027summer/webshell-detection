@@ -1,4 +1,97 @@
 rules:
+  - name: unapproved_exec
+    timeout_ns: 1000000000
+    transitions:
+      - syscall: execve
+        filename:
+          allow:
+            - path_in: /home/victim/venv/bin/uvicorn
+            - path_in: /bin/sh
+            - path_in: /home/victim/server/scripts/export-user-data.sh
+            - path_in: /home/victim/server/scripts/update-chromium.sh
+            - path_in: /home/victim/server/tools/chromium/current/chrome
+            - path_in: /usr/bin/bash
+            - path_in: /usr/bin/chmod
+            - path_in: /usr/bin/convert
+            - path_in: /usr/bin/cp
+            - path_in: /usr/bin/curl
+            - path_in: /usr/bin/dirname
+            - path_in: /usr/bin/ffmpeg
+            - path_in: /usr/bin/jq
+            - path_in: /usr/bin/ln
+            - path_in: /usr/bin/mkdir
+            - path_in: /usr/bin/mktemp
+            - path_in: /usr/bin/mv
+            - path_in: /usr/bin/realpath
+            - path_in: /usr/bin/rm
+            - path_in: /usr/bin/unzip
+            - path_in: /usr/bin/zip
+            # - path_in: /usr/bin/bash
+
+  - name: unapproved_cp_path
+    type: cp_path_policy
+    timeout_ns: 1000000000
+    source:
+      allow:
+        - path_in: /home/victim/server/static/uploads/
+    destination:
+      allow:
+        - starts_with: /tmp/user-export-3-
+
+  - name: unapproved_zip_path
+    type: zip_path_policy
+    timeout_ns: 1000000000
+    archive:
+      allow:
+        - starts_with: /tmp/user-export-3-
+    input:
+      allow:
+        - starts_with: /tmp/user-export-3-
+
+  - name: unapproved_tar_path
+    type: tar_path_policy
+    timeout_ns: 1000000000
+    archive:
+      allow:
+        - path_in: /
+    input:
+      deny:
+        - path_in: /home/victim/server/
+
+  - name: unapproved_file_tool_use
+    timeout_ns: 1000000000 
+    transitions:
+      - syscall: execve
+        filename:
+          deny:
+            - ends_with: /find
+            - ends_with: /grep
+            - ends_with: /ls
+            - ends_with: /cat
+            - ends_with: /tail
+            - ends_with: /head
+            - ends_with: /wc
+            - ends_with: /awk
+            - ends_with: /sed
+            - ends_with: /cut
+            - ends_with: /sort
+            - ends_with: /uniq
+            - ends_with: /tr
+            - ends_with: /xargs
+            - ends_with: /xxd
+            - ends_with: /hexdump
+            - ends_with: /busybox
+            - ends_with: /strings
+      - syscall: openat
+        flags_unset:
+          - O_DIRECTORY
+        access_mode: read
+        pathname:
+          deny:
+            - path_in: /home/victim/server
+            - path_in: /home/victim/server/
+            - path_in: /home/victim/.ssh/
+
   - name: unapproved_link
     timeout_ns: 1000000000
     transitions:
@@ -31,6 +124,7 @@ rules:
         access_mode: read
         pathname:
           allow:
+            - path_in: /home/victim/server/fastapi_board_example.egg-info/
             - path_in: /home/victim/server/app
             - path_in: /home/victim/server/.git
             - path_in: /home/victim/server/.git/
@@ -52,6 +146,10 @@ rules:
             - path_in: /home/victim/server/client/
             - path_in: /home/victim/server/venv
             - path_in: /home/victim/server/venv/
+            - path_in: /home/victim/server/tools
+            - path_in: /home/victim/server/tools/
+            - path_in: /home/victim/server/tools/chromium
+            - path_in: /home/victim/server/tools/chromium/
             - path_in: /home/victim/server/test_binary
             - path_in: /home/victim/server/test_text.txt
             - path_in: /home/victim/server/test_image.png
@@ -68,22 +166,6 @@ rules:
             - path_in: /home/victim/server/
             - path_in: /home/victim/.ssh/
             - path_in: /home/victim/.ssh
-
-  # - name: allowed_read_file
-  #   timeout_ns: 1000000000
-  #   transitions:
-  #     - syscall: openat
-  #       flags_unset:
-  #         - O_DIRECTORY
-  #       access_mode: read
-  #       pathname:
-  #         allow:
-  #           - path_in: ~/server/app/
-  #           - path_in: ~/server/board.db
-  #         deny:
-  #           - path_in: ~/server/.env
-  #           - path_in: ~/.ssh/
-  #           - eq: "~"
 
   - name: allowed_read_dir
     timeout_ns: 1000000000
@@ -136,20 +218,6 @@ rules:
             - path_in: /home/victim/server/static/uploads
             - path_in: /home/victim/server/static/uploads/
             - path_in: /tmp/
-        # oldname:
-        #   allow:
-        #     - path_in: /tmp/
-        #     - path_in: /home/victim/server/tools/chromium/
-        #   deny:
-        #     - path_in: /home/victim/server/static/uploads
-        #     - path_in: /home/victim/server/static/uploads/
-        # newname:
-        #   allow:
-        #     - path_in: /home/victim/server/tools/chromium/
-        #     - starts_with: /tmp/user-export-
-        #   deny:
-        #     - path_in: /home/victim/server/static/uploads
-        #     - path_in: /home/victim/server/static/uploads/
 
   - name: allowed_chmod
     timeout_ns: 1000000000
@@ -275,23 +343,3 @@ rules:
       deny:
         - path_in: /home/victim/server/static/uploads
         - path_in: /home/victim/server/static/uploads/
-
-  # - name: openat_burst_ssh
-  #   type: path_openat_count
-  #   timeout_ns: -1
-  #   threshold: 1
-  #   window_ns: 500000000
-  #   cooldown_ns: 5000000000
-  #   path:
-  #     deny:
-  #       - path_in: /home/victim/.ssh
-
-  # - name: recursive_traversal_ssh
-  #   type: recursive_traversal
-  #   timeout_ns: -1
-  #   threshold: 1
-  #   window_ns: 1000000000
-  #   cooldown_ns: 5000000000
-  #   path:
-  #     deny:
-  #       - path_in: /home/victim/.ssh
