@@ -9,12 +9,17 @@ namespace engine {
 
 struct DetectionState;
 
-using ConditionFunc = bool(*)(const DetectionState&, const SyscallEvent&);
+constexpr int NO_MATCH = -1;
+
+using TransitionFunc = int(*)(DetectionState&, const SyscallEvent&);
 
 struct DetectionRule {
     std::string name;
-    unsigned long timeout_ns;
-    std::vector<ConditionFunc> transitions;
+    long timeout_ns;
+    long cooldown_ns = 0;
+    std::vector<TransitionFunc> transitions;
+    bool inherit_on_fork = false;
+    bool single_active_per_pid = false;
 };
 
 } // namespace engine

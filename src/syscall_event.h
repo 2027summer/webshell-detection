@@ -20,6 +20,18 @@ struct WriteData {
     size_t count;
 };
 
+struct SendToData {
+    int fd;
+    size_t len;
+};
+
+struct ConnectData {
+    int fd;
+    int family;
+    std::string addr;
+    int port;
+};
+
 struct ExecveData {
     std::string filename;
     std::vector<std::string> argv;
@@ -28,6 +40,28 @@ struct ExecveData {
 
 struct ChdirData {
     std::string filename;
+};
+
+struct ChmodData {
+    std::string pathname;
+    int mode;
+};
+
+struct FchmodAtData {
+    int dfd;
+    std::string pathname;
+    int mode;
+    int flags;
+};
+
+struct TruncateData {
+    std::string pathname;
+    long length;
+};
+
+struct FtruncateData {
+    int fd;
+    long length;
 };
 
 struct UnlinkAtData {
@@ -88,8 +122,29 @@ struct CloseData {
 
 struct ReadData {
     unsigned int fd;
-    std::vector<char> buf;
     size_t count;
+};
+
+struct Getdents64Entry {
+    unsigned long long ino;
+    long long off;
+    unsigned short reclen;
+    unsigned char type;
+    std::string name;
+};
+
+struct Getdents64Data {
+    unsigned int fd;
+    unsigned long dirp;
+    unsigned int count;
+    std::vector<Getdents64Entry> entries;
+};
+
+struct CopyFileRangeData {
+    unsigned int fd_in;
+    unsigned int fd_out;
+    size_t len;
+    unsigned int flags;
 };
 
 using SyscallArgs = std::variant<
@@ -98,6 +153,10 @@ using SyscallArgs = std::variant<
     WriteData,
     ExecveData,
     ChdirData,
+    ChmodData,
+    FchmodAtData,
+    TruncateData,
+    FtruncateData,
     UnlinkAtData,
     RenameData,
     RenameAtData,
@@ -107,7 +166,11 @@ using SyscallArgs = std::variant<
     ReadlinkAtData,
     Dup2Data,
     CloseData,
-    ReadData
+    ReadData,
+    SendToData,
+    ConnectData,
+    Getdents64Data,
+    CopyFileRangeData
 >;
 
 struct SyscallEvent {
@@ -115,6 +178,7 @@ struct SyscallEvent {
     pid_t pid;
     SyscallArgs args;
     std::optional<long> retval;
+    bool from_shell;
     unsigned long timestamp_ns;
 };
 }

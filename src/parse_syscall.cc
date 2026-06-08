@@ -1,5 +1,10 @@
 #include <algorithm>
+#include <arpa/inet.h>
 #include <cstring>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <system_error>
+#include "helpers.h"
 #include "parse_syscall.h"
 #include "syscall_event.h"
 
@@ -90,15 +95,16 @@ namespace engine {
     std::optional<ExecveData> parse_execve(pid_t pid, __ptrace_syscall_info info) {
         auto filename = read_child_string(pid, info.entry.args[0]);
         auto argv = read_child_string_vector(pid, info.entry.args[1], 16);
+        auto envp = read_child_string_vector(pid, info.entry.args[2], 64);
 
-        if (!filename.has_value() || !argv.has_value()) {
+        if (!filename.has_value()) {
             return std::nullopt;
         }
 
         return ExecveData {
             .filename = *filename,
-            .argv = *argv,
-            .envp = {}
+            .argv = argv.value_or(std::vector<std::string>{}),
+            .envp = envp.value_or(std::vector<std::string>{})
         };
     }
 
@@ -113,11 +119,19 @@ namespace engine {
             return std::nullopt;
         }
 
+        // bool existed_before = false;
+        // auto absolute_path = get_absolute_path_at(pid, dirfd, *pathname);
+        // if (absolute_path.has_value()) {
+        //     std::error_code ec;
+        //     existed_before = fs::exists(*absolute_path, ec);
+        // }
+
         return OpenAtData {
             .dirfd = dirfd,
             .pathname = *pathname,
             .flags = flags,
-            .mode = mode
+            .mode = mode,
+            // .existed_before = existed_before
         };
     }
 
@@ -130,6 +144,62 @@ namespace engine {
 
         return ChdirData {
             .filename = *filename
+        };
+    }
+
+    std::optional<ChmodData> parse_chmod(pid_t pid, __ptrace_syscall_info info) {
+        auto pathname = read_child_string(pid, info.entry.args[0]);
+        int mode = static_cast<int>(info.entry.args[1]);
+
+        if (!pathname.has_value()) {
+            return std::nullopt;
+        }
+
+        return ChmodData {
+            .pathname = *pathname,
+            .mode = mode
+        };
+    }
+
+    std::optional<FchmodAtData> parse_fchmodat(pid_t pid, __ptrace_syscall_info info) {
+        int dfd = static_cast<int>(info.entry.args[0]);
+        auto pathname = read_child_string(pid, info.entry.args[1]);
+        int mode = static_cast<int>(info.entry.args[2]);
+        int flags = static_cast<int>(info.entry.args[3]);
+
+        if (!pathname.has_value()) {
+            return std::nullopt;
+        }
+
+        return FchmodAtData {
+            .dfd = dfd,
+            .pathname = *pathname,
+            .mode = mode,
+            .flags = flags
+        };
+    }
+
+    std::optional<TruncateData> parse_truncate(pid_t pid, __ptrace_syscall_info info) {
+        auto pathname = read_child_string(pid, info.entry.args[0]);
+        long length = static_cast<long>(info.entry.args[1]);
+
+        if (!pathname.has_value()) {
+            return std::nullopt;
+        }
+
+        return TruncateData {
+            .pathname = *pathname,
+            .length = length
+        };
+    }
+
+    std::optional<FtruncateData> parse_ftruncate(pid_t, __ptrace_syscall_info info) {
+        int fd = static_cast<int>(info.entry.args[0]);
+        long length = static_cast<long>(info.entry.args[1]);
+
+        return FtruncateData {
+            .fd = fd,
+            .length = length
         };
     }
 
@@ -270,6 +340,47 @@ namespace engine {
         };
     }
 
+    std::optional<WriteData> parse_pwrite64(pid_t pid, __ptrace_syscall_info info) {
+        return parse_write(pid, info);
+    }
+
+    std::optional<SendToData> parse_sendto(pid_t, __ptrace_syscall_info info) {
+        return SendToData {
+            .fd = static_cast<int>(info.entry.args[0]),
+            .len = static_cast<size_t>(info.entry.args[2])
+        };
+    }
+
+    std::optional<ConnectData> parse_connect(pid_t pid, __ptrace_syscall_info info) {
+        int fd = static_cast<int>(info.entry.args[0]);
+        size_t addrlen = std::min(static_cast<size_t>(info.entry.args[2]), sizeof(sockaddr_storage));
+        auto bytes = read_child_bytes(pid, info.entry.args[1], addrlen);
+        if (!bytes.has_value() || bytes->size() < sizeof(sa_family_t)) {
+            return std::nullopt;
+        }
+
+        const auto* sa = reinterpret_cast<const sockaddr*>(bytes->data());
+        char addr[INET6_ADDRSTRLEN] = {0};
+        int port = 0;
+
+        if (sa->sa_family == AF_INET && bytes->size() >= sizeof(sockaddr_in)) {
+            const auto* in = reinterpret_cast<const sockaddr_in*>(bytes->data());
+            inet_ntop(AF_INET, &in->sin_addr, addr, sizeof(addr));
+            port = ntohs(in->sin_port);
+        } else if (sa->sa_family == AF_INET6 && bytes->size() >= sizeof(sockaddr_in6)) {
+            const auto* in6 = reinterpret_cast<const sockaddr_in6*>(bytes->data());
+            inet_ntop(AF_INET6, &in6->sin6_addr, addr, sizeof(addr));
+            port = ntohs(in6->sin6_port);
+        }
+
+        return ConnectData {
+            .fd = fd,
+            .family = static_cast<int>(sa->sa_family),
+            .addr = addr,
+            .port = port
+        };
+    }
+
     std::optional<Dup2Data> parse_dup2(pid_t, __ptrace_syscall_info info) {
         return Dup2Data {
             .oldfd = static_cast<unsigned int>(info.entry.args[0]),
@@ -280,6 +391,37 @@ namespace engine {
     std::optional<CloseData> parse_close(pid_t, __ptrace_syscall_info info) {
         return CloseData {
             .fd = static_cast<unsigned int>(info.entry.args[0])
+        };
+    }
+
+    std::optional<ReadData> parse_read(pid_t, __ptrace_syscall_info info) {
+        unsigned int fd = static_cast<unsigned int>(info.entry.args[0]);
+        size_t count = static_cast<size_t>(info.entry.args[2]);
+        return ReadData {
+            .fd = fd,
+            .count = count
+        };
+    }
+
+    std::optional<ReadData> parse_pread64(pid_t pid, __ptrace_syscall_info info) {
+        return parse_read(pid, info);
+    }
+
+    std::optional<Getdents64Data> parse_getdents64(pid_t, __ptrace_syscall_info info) {
+        return Getdents64Data {
+            .fd = static_cast<unsigned int>(info.entry.args[0]),
+            .dirp = info.entry.args[1],
+            .count = static_cast<unsigned int>(info.entry.args[2]),
+            .entries = {}
+        };
+    }
+
+    std::optional<CopyFileRangeData> parse_copy_file_range(pid_t, __ptrace_syscall_info info) {
+        return CopyFileRangeData {
+            .fd_in = static_cast<unsigned int>(info.entry.args[0]),
+            .fd_out = static_cast<unsigned int>(info.entry.args[2]),
+            .len = static_cast<size_t>(info.entry.args[4]),
+            .flags = static_cast<unsigned int>(info.entry.args[5])
         };
     }
 }
