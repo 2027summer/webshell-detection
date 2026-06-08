@@ -351,7 +351,6 @@ namespace engine {
         from_shell_pids.erase(pid);
         allow_pids.erase(pid);
         cooldown_until.erase(pid);
-        fd_tables.erase(pid);
     }
 
     bool Engine::is_tracked(pid_t pid) {
@@ -449,14 +448,23 @@ namespace engine {
             }
 
             // fprintf(stderr, "[DEBUG] check id: %lu current_state_index: %lu\n", state.id, current_state_index);
-            TransitionResult action = this->rules[rule_index].transitions[state.current_state_index](fd_tables[event.pid], state, event);
-            if (action == TransitionResult::Advance) {
-                state.current_state_index++;
-                if (state.current_state_index == this->rules[rule_index].transitions.size()) {
-                    report_detection(state, event);
-                    done_ids.push_back(state.id);
-                }
+            int next_state_index = this->rules[rule_index].transitions[state.current_state_index](state, event);
+            if (next_state_index == NO_TRANSITION) {
+                continue;
             }
+
+            size_t final_state_index = this->rules[rule_index].transitions.size();
+            if (static_cast<size_t>(next_state_index) > final_state_index) {
+                continue;
+            }
+
+            if (static_cast<size_t>(next_state_index) == final_state_index) {
+                report_detection(state, event);
+                done_ids.push_back(state.id);
+                continue;
+            }
+
+            state.current_state_index = static_cast<size_t>(next_state_index);
         }
 
         for (size_t id : done_ids) {
@@ -484,19 +492,24 @@ namespace engine {
             next_state.start_time_ns = event.timestamp_ns;
             next_state.data = std::any();
 
-            TransitionResult action = this->rules[rule_index].transitions[0](fd_tables[event.pid], next_state, event);
-            if (action == TransitionResult::Stay) {
-                this->active_detection_states[next_state.id] = std::move(next_state);
-                this->detection_state_count++;
-            } else if (action == TransitionResult::Advance) {
-                next_state.current_state_index++;
-                if (next_state.current_state_index == this->rules[rule_index].transitions.size()) {
-                    report_detection(next_state, event);
-                } else {
-                    this->active_detection_states[next_state.id] = std::move(next_state);
-                    this->detection_state_count++;
-                }
+            int next_state_index = this->rules[rule_index].transitions[0](next_state, event);
+            if (next_state_index == NO_TRANSITION) {
+                continue;
             }
+
+            size_t final_state_index = this->rules[rule_index].transitions.size();
+            if (static_cast<size_t>(next_state_index) > final_state_index) {
+                continue;
+            }
+
+            if (static_cast<size_t>(next_state_index) == final_state_index) {
+                report_detection(next_state, event);
+                continue;
+            }
+
+            next_state.current_state_index = static_cast<size_t>(next_state_index);
+            this->active_detection_states[next_state.id] = std::move(next_state);
+            this->detection_state_count++;
         }
     }
 
@@ -581,56 +594,6 @@ namespace engine {
         it->second = std::nullopt;
     }
 
-    void Engine::update_fd_table(const SyscallEvent& event) {
-        auto& fds = fd_tables[event.pid];
-
-        if (event.syscall_index == SYS_openat) {
-            if (!event.retval.has_value() || *event.retval < 0) {
-                return;
-            }
-
-            const auto* args = std::get_if<OpenAtData>(&event.args);
-            if (!args) return;
-
-            auto path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
-            if (!path.has_value()) {
-                return;
-            }
-
-            fds[*event.retval] = FdInfo {
-                .path = *path,
-                .flags = args->flags,
-            };
-        } else if (event.syscall_index == SYS_close) {
-            if (!event.retval.has_value() || *event.retval != 0) {
-                return;
-            }
-
-            const auto* args = std::get_if<CloseData>(&event.args);
-            if (!args) return;
-
-            fds.erase(args->fd);
-        } else if (event.syscall_index == SYS_dup2) {
-            if (!event.retval.has_value() || *event.retval < 0) {
-                return;
-            }
-
-            const auto* args = std::get_if<Dup2Data>(&event.args);
-            if (!args) return;
-            if (args->oldfd == args->newfd) {
-                return;
-            }
-
-            auto old_fd = fds.find(args->oldfd);
-            if (old_fd == fds.end()) {
-                fds.erase(args->newfd);
-                return;
-            }
-
-            fds[args->newfd] = old_fd->second;
-        }
-    }
-
     void Engine::process_event(SyscallEvent& event) {
         process_allow_list(event);
         process_from_shell(event);
@@ -650,8 +613,6 @@ namespace engine {
         if (allow_pids.contains(event.pid)) {
             return;
         }
-
-        update_fd_table(event);
 
         process_transition(event);
 

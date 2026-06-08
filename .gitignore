@@ -24,3 +24,4 @@ venv/
 *.yaml
 !rules.example.yaml
 playground/
+*.json

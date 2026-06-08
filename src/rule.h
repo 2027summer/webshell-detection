@@ -1,11 +1,7 @@
 #pragma once
 
-#include <optional>
 #include <string>
 #include <vector>
-#include <unordered_map>
-#include <variant>
-#include "storage.h"
 #include "syscall_event.h"
 #include "detection_state.h"
 
@@ -13,13 +9,9 @@ namespace engine {
 
 struct DetectionState;
 
-enum class TransitionResult {
-    NoMatch,
-    Stay,
-    Advance,
-};
+constexpr int NO_TRANSITION = -1;
 
-using TransitionFunc = TransitionResult(*)(FdTable&, DetectionState&, const SyscallEvent&);
+using TransitionFunc = int(*)(DetectionState&, const SyscallEvent&);
 
 struct DetectionRule {
     std::string name;

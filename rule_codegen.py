@@ -101,7 +101,14 @@ def condition_has_key(condition: dict, key: str):
     return False
 
 
-def gen_allow_deny_skip_expr(check_list: dict, gen_match_cond, require_non_empty: bool = True, indent: str = "    "):
+def gen_allow_deny_expr(
+    check_list: dict,
+    value: str,
+    absolute_path: str,
+    require_non_empty: bool = True,
+    indent: str = "    ",
+    pid: str = "event.pid",
+):
     assert(isinstance(check_list, dict))
 
     has_allow = "allow" in check_list
@@ -117,17 +124,19 @@ def gen_allow_deny_skip_expr(check_list: dict, gen_match_cond, require_non_empty
 
     allow_exprs = []
     for cond in allow_conds:
-        allow_exprs.append(gen_match_cond(cond))
+        allow_exprs.append(gen_string_match_cond(value, cond, absolute_path, pid))
 
     deny_exprs = []
     for cond in deny_conds:
-        deny_exprs.append(gen_match_cond(cond))
+        deny_exprs.append(gen_string_match_cond(value, cond, absolute_path, pid))
 
     cond_allow = " || ".join(allow_exprs)
     if len(allow_exprs) > 1:
         cond_allow = "(\n"
         for i, expr in enumerate(allow_exprs):
-            suffix = " ||" if i + 1 < len(allow_exprs) else ""
+            suffix = ""
+            if i + 1 < len(allow_exprs):
+                suffix = " ||"
             cond_allow += f"{indent}    {expr}{suffix}\n"
         cond_allow += f"{indent})"
 
@@ -135,7 +144,9 @@ def gen_allow_deny_skip_expr(check_list: dict, gen_match_cond, require_non_empty
     if len(deny_exprs) > 1:
         cond_deny = "(\n"
         for i, expr in enumerate(deny_exprs):
-            suffix = " ||" if i + 1 < len(deny_exprs) else ""
+            suffix = ""
+            if i + 1 < len(deny_exprs):
+                suffix = " ||"
             cond_deny += f"{indent}    {expr}{suffix}\n"
         cond_deny += f"{indent})"
 
@@ -147,51 +158,11 @@ def gen_allow_deny_skip_expr(check_list: dict, gen_match_cond, require_non_empty
         return f"!({cond_deny})"
     return ""
 
-
-def gen_env_match(function_name: str, env_rules: dict):
-    body = ""
-    for name, check_list in env_rules.items():
-        assert(isinstance(name, str))
-
-        suffix = only_alnum(name)
-        value_name = f"{function_name}_{suffix}_value"
-        path_name = f"{function_name}_{suffix}_path"
-        matched_name = f"{function_name}_{suffix}_matched"
-
-        skip_expr = gen_allow_deny_skip_expr(
-            check_list,
-            lambda cond: gen_string_match_cond(f"(*{path_name})", cond, path_name),
-            indent="        ",
-        )
-
-        body += f"    auto {value_name} = get_env_value(args->envp, \"{name}\");\n"
-        body += f"    if (!{value_name}.has_value()) {{\n"
-        body += "        return TransitionResult::NoMatch;\n"
-        body += "    }\n"
-        body += f"    bool {matched_name} = false;\n"
-        body += f"    for (const auto& env_path : split_env_paths(*{value_name})) {{\n"
-        body += f"        auto {path_name} = get_env_path(event.pid, env_path);\n"
-        body += f"        if (!{path_name}.has_value()) {{\n"
-        body += "            continue;\n"
-        body += "        }\n"
-
-        body += f"        if ({skip_expr}) {{\n"
-        body += "            continue;\n"
-        body += "        }\n"
-
-        body += f"        {matched_name} = true;\n"
-        body += "        break;\n"
-        body += "    }\n"
-        body += f"    if ({matched_name} == false) {{\n"
-        body += "        return TransitionResult::NoMatch;\n"
-        body += "    }\n"
-    return body
-
-
 codegen_rules_h_template = f"""#include <any>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <unordered_map>
 #include <unordered_set>
 #include "engine.h"
 #include "helpers.h"
@@ -201,6 +172,11 @@ namespace detection_rules {{
 using namespace engine;
 
 struct PathCountState {{
+    std::unordered_set<std::string> paths;
+}};
+
+struct RecursiveTraversalState {{
+    std::unordered_map<long, std::string> fd_paths;
     std::unordered_set<std::string> paths;
 }};
 
@@ -214,11 +190,11 @@ inline bool is_path_in(const std::optional<std::string>& absolute_path, pid_t pi
         return false;
     }}
 
+    if (path.ends_with("/")) {{
+        return *absolute_path != *path_in && absolute_path->starts_with(*path_in);
+    }}
     if (*absolute_path == *path_in) {{
         return true;
-    }}
-    if (path.ends_with("/")) {{
-        return absolute_path->starts_with(*path_in) || *absolute_path + "/" == *path_in;
     }}
     return *absolute_path == *path_in + "/";
 }}
@@ -233,17 +209,17 @@ inline void register_codegen_rules(engine::Engine& engine) {{
 
 
 def gen_execve(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_execve) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 
 """
 
@@ -252,18 +228,19 @@ def gen_execve(function_name: str, t: dict):
 
         body += "    auto filename_path = get_execve_path(event.pid, args->filename);\n"
         body += "    if (!filename_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
         filename = "(*filename_path)"
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond(filename, cond, "filename_path"),
+            filename,
+            "filename_path",
         )
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "argv" in t and len(t["argv"]) > 0:
@@ -276,7 +253,7 @@ def gen_execve(function_name: str, t: dict):
 
         max_index = max(argv.keys())
         body += f"""    if (args->argv.size() < {max_index + 1}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
@@ -295,54 +272,8 @@ def gen_execve(function_name: str, t: dict):
 
             cond = " || ".join(l)
             body += f"    if (!({cond})) {{\n"
-            body += f"        return TransitionResult::NoMatch;\n"
+            body += f"        return NO_TRANSITION;\n"
             body += f"    }}\n"
-
-    if "argv_allow" in t:
-        argv_allow = t["argv_allow"]
-        assert(isinstance(argv_allow, dict))
-        for key in argv_allow.keys():
-            assert(key == "argc" or key == "args")
-
-        argc = argv_allow["argc"]
-        argv = argv_allow["args"]
-        assert(isinstance(argc, int) and argc >= 0)
-        assert(isinstance(argv, dict))
-
-        for index in argv.keys():
-            assert(isinstance(index, int))
-            assert(index >= 0 and index < argc)
-
-        body += f"""    if (args->argv.size() == {argc}) {{
-        bool argv_allowed = true;
-"""
-        for index, conditions in argv.items():
-            assert(isinstance(conditions, list) and len(conditions) > 0)
-
-            arg = f"args->argv[{index}]"
-            absolute_path = f"argv_allow_{index}_path"
-            if any(condition_has_key(condition, "path_in") for condition in conditions):
-                body += f"        auto {absolute_path} = get_absolute_path(event.pid, {arg});\n"
-
-            l = []
-            for condition in conditions:
-                l.append(gen_string_match_cond(arg, condition, absolute_path))
-
-            cond = " || ".join(l)
-            body += f"""        if (!({cond})) {{
-            argv_allowed = false;
-        }}
-"""
-        body += """        if (argv_allowed) {
-            return TransitionResult::NoMatch;
-        }
-    }
-"""
-
-    if "env" in t and len(t["env"]) > 0:
-        env = t["env"]
-        assert(isinstance(env, dict))
-        body += gen_env_match(function_name, env)
 
     if "find_name_keywords" in t and len(t["find_name_keywords"]) > 0:
         keywords = t["find_name_keywords"]
@@ -364,7 +295,7 @@ def gen_execve(function_name: str, t: dict):
         }}
     }}
     if (flag_find_name_keywords == false) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
@@ -409,31 +340,31 @@ def gen_execve(function_name: str, t: dict):
         }}
     }}
     if (flag == false) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_openat(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
     if (!event.retval.has_value() || *event.retval < 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
     if "dirfd" in t:
         body += f"""    if (args->dirfd != {t["dirfd"]}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
@@ -441,38 +372,12 @@ def gen_openat(function_name: str, t: dict):
         assert(isinstance(t["from_shell"], bool))
         if t["from_shell"]:
             body += """    if (!event.from_shell) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
         else:
             body += """    if (event.from_shell) {
-        return TransitionResult::NoMatch;
-    }
-"""
-
-    if "relative" in t:
-        assert(isinstance(t["relative"], bool))
-        if t["relative"]:
-            body += """    if (args->pathname.starts_with("/")) {
-        return TransitionResult::NoMatch;
-    }
-"""
-        else:
-            body += """    if (!args->pathname.starts_with("/")) {
-        return TransitionResult::NoMatch;
-    }
-"""
-
-    if "existed_before" in t:
-        assert(isinstance(t["existed_before"], bool))
-        if t["existed_before"]:
-            body += """    if (!args->existed_before) {
-        return TransitionResult::NoMatch;
-    }
-"""
-        else:
-            body += """    if (args->existed_before) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
 
@@ -481,17 +386,18 @@ def gen_openat(function_name: str, t: dict):
 
         body += """    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!absolute_path.has_value()) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*absolute_path)", cond, "absolute_path"),
+            "(*absolute_path)",
+            "absolute_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "access_mode" in t:
@@ -499,18 +405,18 @@ def gen_openat(function_name: str, t: dict):
         assert(access_mode == "read" or access_mode == "write" or access_mode == "readonly")
         if access_mode == "read":
             body += """    if ((args->flags & O_ACCMODE) == O_WRONLY) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
         elif access_mode == "write":
             body += """    int access_mode = args->flags & O_ACCMODE;
     if (access_mode != O_WRONLY && access_mode != O_RDWR) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
         else:
             body += """    if ((args->flags & O_ACCMODE) != O_RDONLY) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
 
@@ -519,7 +425,7 @@ def gen_openat(function_name: str, t: dict):
         # if "O_RDONLY" in flags:
         for flag in flags:
             body += f"""    if (!((args->flags & {flag}) == {flag})) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
@@ -528,68 +434,110 @@ def gen_openat(function_name: str, t: dict):
         assert(isinstance(flags, list))
         for flag in flags:
             body += f"""    if ((args->flags & {flag}) == {flag}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 
 def gen_connect(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_connect) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || (*event.retval != 0 && *event.retval != -115)) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<ConnectData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
     if (args->port == 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
     fprintf(stderr, "> %s %d %d\\n", args->addr.c_str(), args->port, args->family);
 """
 
     if "destination" in t:
         check_list = t["destination"]
-        skip_expr = gen_allow_deny_skip_expr(
-            check_list,
-            lambda cond: gen_destination_match_cond(cond),
-            False,
-        )
+
+        assert(isinstance(check_list, dict))
+        has_allow = "allow" in check_list
+        has_deny = "deny" in check_list
+        assert(has_allow or has_deny)
+        for key in check_list.keys():
+            assert(key == "allow" or key == "deny")
+
+        allow_conds = check_list.get("allow", [])
+        deny_conds = check_list.get("deny", [])
+
+        allow_exprs = []
+        for cond in allow_conds:
+            allow_exprs.append(gen_destination_match_cond(cond))
+
+        deny_exprs = []
+        for cond in deny_conds:
+            deny_exprs.append(gen_destination_match_cond(cond))
+
+        cond_allow = " || ".join(allow_exprs)
+        if len(allow_exprs) > 1:
+            cond_allow = "(\n"
+            for i, expr in enumerate(allow_exprs):
+                suffix = ""
+                if i + 1 < len(allow_exprs):
+                    suffix = " ||"
+                cond_allow += f"        {expr}{suffix}\n"
+            cond_allow += "    )"
+
+        cond_deny = " || ".join(deny_exprs)
+        if len(deny_exprs) > 1:
+            cond_deny = "(\n"
+            for i, expr in enumerate(deny_exprs):
+                suffix = ""
+                if i + 1 < len(deny_exprs):
+                    suffix = " ||"
+                cond_deny += f"        {expr}{suffix}\n"
+            cond_deny += "    )"
+
+        skip_expr = ""
+        if len(allow_conds) > 0 and len(deny_conds) > 0:
+            skip_expr = f"({cond_allow}) || !({cond_deny})"
+        elif len(allow_conds) > 0:
+            skip_expr = cond_allow
+        elif len(deny_conds) > 0:
+            skip_expr = f"!({cond_deny})"
+
         if len(skip_expr) > 0:
             body += f"    if ({skip_expr}) {{\n"
-            body += f"        return TransitionResult::NoMatch;\n"
+            body += f"        return NO_TRANSITION;\n"
             body += f"    }}\n"
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_unlinkat(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_unlinkat) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<UnlinkAtData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "dfd" in t:
         body += f"""    if (args->dfd != {t["dfd"]}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
@@ -598,39 +546,40 @@ def gen_unlinkat(function_name: str, t: dict):
 
         allow_conds = check_list.get("allow", [])
         deny_conds = check_list.get("deny", [])
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("args->pathname", cond, "absolute_path"),
+            "args->pathname",
+            "absolute_path",
         )
 
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
             body += "    auto absolute_path = get_absolute_path_at(event.pid, args->dfd, args->pathname);\n"
             body += "    if (!absolute_path.has_value()) {\n"
-            body += "        return TransitionResult::NoMatch;\n"
+            body += "        return NO_TRANSITION;\n"
             body += "    }\n"
             body += "\n"
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_renameat2(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_renameat2) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<RenameAt2Data>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "oldname" in t:
@@ -638,9 +587,10 @@ def gen_renameat2(function_name: str, t: dict):
 
         allow_conds = oldname_rule.get("allow", [])
         deny_conds = oldname_rule.get("deny", [])
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             oldname_rule,
-            lambda cond: gen_string_match_cond("args->oldname", cond, "oldname_path"),
+            "args->oldname",
+            "oldname_path",
         )
 
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
@@ -648,7 +598,7 @@ def gen_renameat2(function_name: str, t: dict):
             body += "\n"
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "newname" in t:
@@ -656,36 +606,37 @@ def gen_renameat2(function_name: str, t: dict):
 
         body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             newname_rule,
-            lambda cond: gen_string_match_cond("(*newname_path)", cond, "newname_path"),
+            "(*newname_path)",
+            "newname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 
 def gen_rename(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_rename) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<RenameData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "oldname" in t:
@@ -693,16 +644,17 @@ def gen_rename(function_name: str, t: dict):
 
         body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
         body += "    if (!oldname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*oldname_path)", cond, "oldname_path"),
+            "(*oldname_path)",
+            "oldname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "newname" in t:
@@ -710,47 +662,48 @@ def gen_rename(function_name: str, t: dict):
 
         body += "    auto newname_path = get_absolute_path(event.pid, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*newname_path)", cond, "newname_path"),
+            "(*newname_path)",
+            "newname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 
 def gen_renameat(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_renameat) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<RenameAtData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "oldfd" in t:
         body += f"""    if (args->oldfd != {t["oldfd"]}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
     if "newfd" in t:
         body += f"""    if (args->newfd != {t["newfd"]}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
@@ -759,16 +712,17 @@ def gen_renameat(function_name: str, t: dict):
 
         body += "    auto oldname_path = get_absolute_path_at(event.pid, args->oldfd, args->oldname);\n"
         body += "    if (!oldname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*oldname_path)", cond, "oldname_path"),
+            "(*oldname_path)",
+            "oldname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "newname" in t:
@@ -776,36 +730,37 @@ def gen_renameat(function_name: str, t: dict):
 
         body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
         body += "    if (!newname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*newname_path)", cond, "newname_path"),
+            "(*newname_path)",
+            "newname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 
 def gen_chmod(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_chmod) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<ChmodData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "pathname" in t:
@@ -813,49 +768,50 @@ def gen_chmod(function_name: str, t: dict):
 
         body += "    auto pathname_path = get_absolute_path(event.pid, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*pathname_path)", cond, "pathname_path"),
+            "(*pathname_path)",
+            "pathname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "mode_any" in t:
         mode_any = t["mode_any"]
         assert(mode_any == "execute")
         body += """    if ((args->mode & 0111) == 0) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 
 def gen_fchmodat(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_fchmodat) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<FchmodAtData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "dfd" in t:
         body += f"""    if (args->dfd != {t["dfd"]}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
@@ -864,44 +820,45 @@ def gen_fchmodat(function_name: str, t: dict):
 
         body += "    auto pathname_path = get_absolute_path_at(event.pid, args->dfd, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*pathname_path)", cond, "pathname_path"),
+            "(*pathname_path)",
+            "pathname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "mode_any" in t:
         mode_any = t["mode_any"]
         assert(mode_any == "execute")
         body += """    if ((args->mode & 0111) == 0) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 
 def gen_truncate(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_truncate) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<TruncateData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "pathname" in t:
@@ -909,42 +866,43 @@ def gen_truncate(function_name: str, t: dict):
 
         body += "    auto pathname_path = get_absolute_path(event.pid, args->pathname);\n"
         body += "    if (!pathname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*pathname_path)", cond, "pathname_path"),
+            "(*pathname_path)",
+            "pathname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "length" in t:
         body += f"""    if (args->length != {t["length"]}L) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 
 def gen_ftruncate(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_ftruncate) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<FtruncateData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "pathname" in t:
@@ -952,42 +910,49 @@ def gen_ftruncate(function_name: str, t: dict):
 
         body += "    auto pathname_path = get_fd_path(event.pid, args->fd);\n"
         body += "    if (!pathname_path.has_value()) {\n"
-        body += "        return TransitionResult::NoMatch;\n"
+        body += "        return NO_TRANSITION;\n"
         body += "    }\n"
         body += "\n"
 
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("(*pathname_path)", cond, "pathname_path"),
+            "(*pathname_path)",
+            "pathname_path",
         )
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
     if "length" in t:
         body += f"""    if (args->length != {t["length"]}L) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
-    body += "    return TransitionResult::Advance;\n"
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_linkat(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_linkat) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<LinkAtData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "oldfd" in t:
         body += f"""    if (args->oldfd != {t["oldfd"]}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
+    }}
+"""
+
+    if "newfd" in t:
+        body += f"""    if (args->newfd != {t["newfd"]}) {{
+        return NO_TRANSITION;
     }}
 """
 
@@ -996,9 +961,10 @@ def gen_linkat(function_name: str, t: dict):
 
         allow_conds = check_list.get("allow", [])
         deny_conds = check_list.get("deny", [])
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("args->oldname", cond, "oldname_path"),
+            "args->oldname",
+            "oldname_path",
         )
 
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
@@ -1006,34 +972,52 @@ def gen_linkat(function_name: str, t: dict):
                 assert(False)
             if "oldfd" not in t:
                 body += """    if (args->oldfd != AT_FDCWD) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
             body += "    auto oldname_path = get_absolute_path(event.pid, args->oldname);\n"
             body += "\n"
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
-    body += "    return TransitionResult::Advance;\n"
+    if "newname" in t:
+        check_list = t["newname"]
+
+        body += "    auto newname_path = get_absolute_path_at(event.pid, args->newfd, args->newname);\n"
+        body += "    if (!newname_path.has_value()) {\n"
+        body += "        return NO_TRANSITION;\n"
+        body += "    }\n"
+        body += "\n"
+
+        skip_expr = gen_allow_deny_expr(
+            check_list,
+            "(*newname_path)",
+            "newname_path",
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return NO_TRANSITION;\n"
+        body += f"    }}\n"
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
 
 def gen_symlinkat(function_name: str, t: dict):
-    body = f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    body = f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_symlinkat) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<SymlinkAtData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 """
 
     if "newdfd" in t:
         body += f"""    if (args->newdfd != {t["newdfd"]}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 """
 
@@ -1042,9 +1026,10 @@ def gen_symlinkat(function_name: str, t: dict):
 
         allow_conds = check_list.get("allow", [])
         deny_conds = check_list.get("deny", [])
-        skip_expr = gen_allow_deny_skip_expr(
+        skip_expr = gen_allow_deny_expr(
             check_list,
-            lambda cond: gen_string_match_cond("args->oldname", cond, "oldname_path"),
+            "args->oldname",
+            "oldname_path",
         )
 
         if any(condition_has_key(cond, "path_in") for cond in allow_conds + deny_conds):
@@ -1053,7 +1038,7 @@ def gen_symlinkat(function_name: str, t: dict):
 
             if "newdfd" not in t:
                 body += """    if (args->newdfd != AT_FDCWD) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 """
             body += """    std::optional<std::string> oldname_path;
@@ -1064,7 +1049,7 @@ def gen_symlinkat(function_name: str, t: dict):
         auto newname_path = get_absolute_path(event.pid, args->newname);
 
         if (!newname_path.has_value()) {
-            return TransitionResult::NoMatch;
+            return NO_TRANSITION;
         }
 
         std::string newname_dir = fs::path(*newname_path).parent_path().string();
@@ -1074,10 +1059,28 @@ def gen_symlinkat(function_name: str, t: dict):
 """
 
         body += f"    if ({skip_expr}) {{\n"
-        body += f"        return TransitionResult::NoMatch;\n"
+        body += f"        return NO_TRANSITION;\n"
         body += f"    }}\n"
 
-    body += "    return TransitionResult::Advance;\n"
+    if "newname" in t:
+        check_list = t["newname"]
+
+        body += "    auto newname_path = get_absolute_path_at(event.pid, args->newdfd, args->newname);\n"
+        body += "    if (!newname_path.has_value()) {\n"
+        body += "        return NO_TRANSITION;\n"
+        body += "    }\n"
+        body += "\n"
+
+        skip_expr = gen_allow_deny_expr(
+            check_list,
+            "(*newname_path)",
+            "newname_path",
+        )
+        body += f"    if ({skip_expr}) {{\n"
+        body += f"        return NO_TRANSITION;\n"
+        body += f"    }}\n"
+
+    body += "    return static_cast<int>(state.current_state_index + 1);\n"
     body += "}\n"
 
     return body
@@ -1087,48 +1090,127 @@ def gen_recursive_traversal(name: str, function_names: list[str], rule: dict):
     path_rule = rule.get("path", {})
     path_skip_expr = gen_path_skip_expr("absolute_path", path_rule)
 
-    return f"""inline TransitionResult {function_names[0]}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
-    if (event.syscall_index != SYS_getdents64) {{
-        return TransitionResult::NoMatch;
+    return f"""inline int {function_names[0]}(DetectionState& state, const SyscallEvent& event) {{
+    if (event.syscall_index != SYS_openat) {{
+        return NO_TRANSITION;
     }}
 
-    if (!event.retval.has_value() || *event.retval <= 0) {{
-        return TransitionResult::NoMatch;
+    if (!event.retval.has_value() || *event.retval < 0) {{
+        return NO_TRANSITION;
     }}
 
-    const auto* args = std::get_if<Getdents64Data>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    const auto* args = std::get_if<OpenAtData>(&event.args);
+    if (!args) return NO_TRANSITION;
 
-    auto fd_it = fds.find(args->fd);
-    if (fd_it == fds.end()) {{
-        return TransitionResult::NoMatch;
-    }}
-
-    std::optional<std::string> absolute_path = fd_it->second.path;
+    auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!absolute_path.has_value()) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if ({path_skip_expr}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!state.data.has_value()) {{
-        state.data = PathCountState {{}};
+        state.data = RecursiveTraversalState {{}};
     }}
 
-    auto* data = std::any_cast<PathCountState>(&state.data);
+    auto* data = std::any_cast<RecursiveTraversalState>(&state.data);
     if (!data) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
-    data->paths.insert(*absolute_path);
+    data->fd_paths[*event.retval] = *absolute_path;
+
+    return static_cast<int>(state.current_state_index + 1);
+}}
+
+inline int {function_names[1]}(DetectionState& state, const SyscallEvent& event) {{
+    auto* data = std::any_cast<RecursiveTraversalState>(&state.data);
+    if (!data) {{
+        return NO_TRANSITION;
+    }}
+
+    if (event.syscall_index == SYS_openat) {{
+        if (!event.retval.has_value() || *event.retval < 0) {{
+            return NO_TRANSITION;
+        }}
+
+        const auto* args = std::get_if<OpenAtData>(&event.args);
+        if (!args) return NO_TRANSITION;
+
+        auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
+        if (!absolute_path.has_value()) {{
+            return NO_TRANSITION;
+        }}
+
+        if ({path_skip_expr}) {{
+            return NO_TRANSITION;
+        }}
+
+        data->fd_paths[*event.retval] = *absolute_path;
+
+        return static_cast<int>(state.current_state_index);
+    }}
+
+    if (event.syscall_index == SYS_close) {{
+        if (!event.retval.has_value() || *event.retval != 0) {{
+            return NO_TRANSITION;
+        }}
+
+        const auto* args = std::get_if<CloseData>(&event.args);
+        if (!args) return NO_TRANSITION;
+
+        data->fd_paths.erase(args->fd);
+
+        return static_cast<int>(state.current_state_index);
+    }}
+
+    if (event.syscall_index == SYS_dup2) {{
+        if (!event.retval.has_value() || *event.retval < 0) {{
+            return NO_TRANSITION;
+        }}
+
+        const auto* args = std::get_if<Dup2Data>(&event.args);
+        if (!args) return NO_TRANSITION;
+
+        if (args->oldfd == args->newfd) {{
+            return static_cast<int>(state.current_state_index);
+        }}
+
+        auto old_fd = data->fd_paths.find(args->oldfd);
+        if (old_fd == data->fd_paths.end()) {{
+            data->fd_paths.erase(args->newfd);
+        }} else {{
+            data->fd_paths[args->newfd] = old_fd->second;
+        }}
+
+        return static_cast<int>(state.current_state_index);
+    }}
+
+    if (event.syscall_index != SYS_getdents64) {{
+        return NO_TRANSITION;
+    }}
+
+    if (!event.retval.has_value() || *event.retval <= 0) {{
+        return NO_TRANSITION;
+    }}
+
+    const auto* args = std::get_if<Getdents64Data>(&event.args);
+    if (!args) return NO_TRANSITION;
+
+    auto fd_it = data->fd_paths.find(args->fd);
+    if (fd_it == data->fd_paths.end()) {{
+        return NO_TRANSITION;
+    }}
+
+    data->paths.insert(fd_it->second);
 
     if (static_cast<long>(data->paths.size()) < {threshold}L) {{
-        return TransitionResult::Stay;
+        return static_cast<int>(state.current_state_index);
     }}
 
-    return TransitionResult::Advance;
+    return static_cast<int>(state.current_state_index + 1);
 }}
 """
 
@@ -1138,29 +1220,25 @@ def gen_path_openat_count(name: str, function_name: str, rule: dict):
     path_rule = rule.get("path", {})
     path_skip_expr = gen_path_skip_expr("absolute_path", path_rule)
 
-    return f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    return f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
     if (event.syscall_index != SYS_openat) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval < 0) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
-
-    if ((args->flags & O_DIRECTORY) == O_DIRECTORY) {{
-        return TransitionResult::NoMatch;
-    }}
+    if (!args) return NO_TRANSITION;
 
     auto absolute_path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!absolute_path.has_value()) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if ({path_skip_expr}) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!state.data.has_value()) {{
@@ -1169,16 +1247,16 @@ def gen_path_openat_count(name: str, function_name: str, rule: dict):
 
     auto* data = std::any_cast<PathCountState>(&state.data);
     if (!data) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     data->paths.insert(*absolute_path);
 
     if (static_cast<long>(data->paths.size()) < {threshold}L) {{
-        return TransitionResult::Stay;
+        return static_cast<int>(state.current_state_index);
     }}
 
-    return TransitionResult::Advance;
+    return static_cast<int>(state.current_state_index + 1);
 }}
 """
 
@@ -1275,19 +1353,19 @@ def gen_exec_argv_setup(command_paths: list[str]):
 
     if (event.syscall_index == SYS_execve) {{
         const auto* args = std::get_if<ExecveData>(&event.args);
-        if (!args) return TransitionResult::NoMatch;
+        if (!args) return NO_TRANSITION;
         exec_path = get_execve_path(event.pid, args->filename);
         argv = args->argv;
     }} else {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!event.retval.has_value() || *event.retval != 0 || !exec_path.has_value()) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     if (!({command_cond})) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
 """
@@ -1297,7 +1375,7 @@ def gen_cp_path_policy(function_name: str, rule: dict):
     source_allow = gen_allow_path_expr("source_path", rule["source"])
     destination_allow = gen_allow_path_expr("destination_path", rule["destination"])
 
-    return f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    return f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
 {gen_exec_argv_setup(["/bin/cp", "/usr/bin/cp"])}    std::vector<std::string> paths;
     std::optional<std::string> target_directory;
     bool end_options = false;
@@ -1308,7 +1386,7 @@ def gen_cp_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && (arg == "--help" || arg == "--version")) {{
-            return TransitionResult::NoMatch;
+            return NO_TRANSITION;
         }}
         if (!end_options && arg == "--") {{
             end_options = true;
@@ -1319,7 +1397,7 @@ def gen_cp_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && arg == "--target-directory") {{
-            if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
+            if (i + 1 >= argv.size()) return NO_TRANSITION;
             target_directory = argv[++i];
             continue;
         }}
@@ -1328,12 +1406,12 @@ def gen_cp_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && arg == "-t") {{
-            if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
+            if (i + 1 >= argv.size()) return NO_TRANSITION;
             target_directory = argv[++i];
             continue;
         }}
         if (!end_options && (arg == "-S" || arg == "--suffix")) {{
-            if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
+            if (i + 1 >= argv.size()) return NO_TRANSITION;
             i++;
             continue;
         }}
@@ -1359,11 +1437,11 @@ def gen_cp_path_policy(function_name: str, rule: dict):
     std::vector<std::string> sources;
     std::optional<std::string> destination;
     if (target_directory.has_value()) {{
-        if (paths.empty()) return TransitionResult::NoMatch;
+        if (paths.empty()) return NO_TRANSITION;
         sources = paths;
         destination = *target_directory;
     }} else {{
-        if (paths.size() < 2) return TransitionResult::NoMatch;
+        if (paths.size() < 2) return NO_TRANSITION;
         sources.assign(paths.begin(), paths.end() - 1);
         destination = paths.back();
     }}
@@ -1371,22 +1449,22 @@ def gen_cp_path_policy(function_name: str, rule: dict):
     for (const auto& source : sources) {{
         auto source_path = get_execve_path(event.pid, source);
         if (!source_path.has_value()) {{
-            return TransitionResult::NoMatch;
+            return NO_TRANSITION;
         }}
         if (!({source_allow})) {{
-            return TransitionResult::Advance;
+            return static_cast<int>(state.current_state_index + 1);
         }}
     }}
 
     auto destination_path = get_execve_path(event.pid, *destination);
     if (!destination_path.has_value()) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
     if (!({destination_allow})) {{
-        return TransitionResult::Advance;
+        return static_cast<int>(state.current_state_index + 1);
     }}
 
-    return TransitionResult::NoMatch;
+    return NO_TRANSITION;
 }}
 """
 
@@ -1395,7 +1473,7 @@ def gen_zip_path_policy(function_name: str, rule: dict):
     archive_allow = gen_allow_path_expr("archive_path", rule["archive"])
     input_allow = gen_allow_path_expr("input_path", rule["input"])
 
-    return f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    return f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
 {gen_exec_argv_setup(["/bin/zip", "/usr/bin/zip"])}    std::vector<std::string> paths;
     bool end_options = false;
 
@@ -1409,10 +1487,10 @@ def gen_zip_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && (arg == "--help" || arg == "--version")) {{
-            return TransitionResult::NoMatch;
+            return NO_TRANSITION;
         }}
         if (!end_options && (arg == "-b" || arg == "-t" || arg == "-n")) {{
-            if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
+            if (i + 1 >= argv.size()) return NO_TRANSITION;
             i++;
             continue;
         }}
@@ -1433,28 +1511,28 @@ def gen_zip_path_policy(function_name: str, rule: dict):
     }}
 
     if (paths.size() < 2) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     auto archive_path = get_execve_path(event.pid, paths[0]);
     if (!archive_path.has_value()) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
     if (!({archive_allow})) {{
-        return TransitionResult::Advance;
+        return static_cast<int>(state.current_state_index + 1);
     }}
 
     for (size_t i = 1; i < paths.size(); i++) {{
         auto input_path = get_execve_path(event.pid, paths[i]);
         if (!input_path.has_value()) {{
-            return TransitionResult::NoMatch;
+            return NO_TRANSITION;
         }}
         if (!({input_allow})) {{
-            return TransitionResult::Advance;
+            return static_cast<int>(state.current_state_index + 1);
         }}
     }}
 
-    return TransitionResult::NoMatch;
+    return NO_TRANSITION;
 }}
 """
 
@@ -1463,7 +1541,7 @@ def gen_tar_path_policy(function_name: str, rule: dict):
     archive_allow = gen_allow_path_expr("archive_path", rule["archive"])
     input_allow = gen_allow_path_expr("input_path", rule["input"])
 
-    return f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
+    return f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
 {gen_exec_argv_setup(["/bin/tar", "/usr/bin/tar"])}    std::optional<std::string> archive;
     std::optional<std::string> current_directory;
     std::vector<std::string> inputs;
@@ -1489,28 +1567,34 @@ def gen_tar_path_policy(function_name: str, rule: dict):
             continue;
         }}
         if (!end_options && (arg == "--help" || arg == "--version")) {{
-            return TransitionResult::NoMatch;
+            return NO_TRANSITION;
         }}
         if (!end_options && arg == "--create") {{
             create = true;
             continue;
         }}
-        if (!end_options && arg.starts_with("--file=")) {{
-            archive = arg.substr(7);
-            continue;
-        }}
-        if (!end_options && arg == "--file") {{
-            if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
-            archive = argv[++i];
-            continue;
-        }}
-        if (!end_options && arg.starts_with("--directory=")) {{
-            set_directory(arg.substr(12));
-            continue;
-        }}
-        if (!end_options && arg == "--directory") {{
-            if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
-            set_directory(argv[++i]);
+        if (!end_options && (
+            arg.starts_with("--file=") ||
+            arg.starts_with("--directory=") ||
+            arg == "--file" ||
+            arg == "--directory"
+        )) {{
+            bool file_option = arg.starts_with("--file");
+            std::string value;
+            if (arg == "--file" || arg == "--directory") {{
+                if (i + 1 >= argv.size()) return NO_TRANSITION;
+                value = argv[++i];
+            }} else if (file_option) {{
+                value = arg.substr(7);
+            }} else {{
+                value = arg.substr(12);
+            }}
+
+            if (file_option) {{
+                archive = value;
+            }} else {{
+                set_directory(value);
+            }}
             continue;
         }}
         if (!end_options && (
@@ -1520,7 +1604,7 @@ def gen_tar_path_policy(function_name: str, rule: dict):
             arg == "--use-compress-program" ||
             arg == "--files-from"
         )) {{
-            if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
+            if (i + 1 >= argv.size()) return NO_TRANSITION;
             i++;
             continue;
         }}
@@ -1536,56 +1620,38 @@ def gen_tar_path_policy(function_name: str, rule: dict):
         if (!end_options && arg.starts_with("--")) {{
             continue;
         }}
-        if (!end_options && arg.starts_with("-") && arg.size() > 1) {{
-            for (size_t j = 1; j < arg.size(); j++) {{
+        if (!end_options && ((arg.starts_with("-") && arg.size() > 1) || i == 1)) {{
+            bool old_style_options = !arg.starts_with("-");
+            size_t j = old_style_options ? 0 : 1;
+            for (; j < arg.size(); j++) {{
                 char opt = arg[j];
                 if (opt == 'c') {{
                     create = true;
                     continue;
                 }}
                 if (opt == 'f') {{
-                    if (j + 1 < arg.size()) {{
+                    if (!old_style_options && j + 1 < arg.size()) {{
                         archive = arg.substr(j + 1);
                     }} else {{
-                        if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
+                        if (i + 1 >= argv.size()) return NO_TRANSITION;
                         archive = argv[++i];
                     }}
                     break;
                 }}
                 if (opt == 'C') {{
-                    if (j + 1 < arg.size()) {{
+                    if (!old_style_options && j + 1 < arg.size()) {{
                         set_directory(arg.substr(j + 1));
                     }} else {{
-                        if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
+                        if (i + 1 >= argv.size()) return NO_TRANSITION;
                         set_directory(argv[++i]);
                     }}
                     break;
                 }}
-                if (opt == 'T' || opt == 'X' || opt == 'I') {{
+                if (!old_style_options && (opt == 'T' || opt == 'X' || opt == 'I')) {{
                     if (j + 1 >= arg.size()) {{
-                        if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
+                        if (i + 1 >= argv.size()) return NO_TRANSITION;
                         i++;
                     }}
-                    break;
-                }}
-            }}
-            continue;
-        }}
-        if (!end_options && i == 1) {{
-            for (size_t j = 0; j < arg.size(); j++) {{
-                char opt = arg[j];
-                if (opt == 'c') {{
-                    create = true;
-                    continue;
-                }}
-                if (opt == 'f') {{
-                    if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
-                    archive = argv[++i];
-                    break;
-                }}
-                if (opt == 'C') {{
-                    if (i + 1 >= argv.size()) return TransitionResult::NoMatch;
-                    set_directory(argv[++i]);
                     break;
                 }}
             }}
@@ -1596,15 +1662,15 @@ def gen_tar_path_policy(function_name: str, rule: dict):
     }}
 
     if (!create || !archive.has_value() || inputs.empty()) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
 
     auto archive_path = get_execve_path(event.pid, *archive);
     if (!archive_path.has_value()) {{
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }}
     if (!({archive_allow})) {{
-        return TransitionResult::Advance;
+        return static_cast<int>(state.current_state_index + 1);
     }}
 
     for (size_t i = 0; i < inputs.size(); i++) {{
@@ -1614,19 +1680,19 @@ def gen_tar_path_policy(function_name: str, rule: dict):
         }} else {{
             auto directory_path = get_execve_path(event.pid, *input_directories[i]);
             if (!directory_path.has_value()) {{
-                return TransitionResult::NoMatch;
+                return NO_TRANSITION;
             }}
             input_path = get_execve_path(event.pid, *directory_path + "/" + inputs[i]);
         }}
         if (!input_path.has_value()) {{
-            return TransitionResult::NoMatch;
+            return NO_TRANSITION;
         }}
         if (!({input_allow})) {{
-            return TransitionResult::Advance;
+            return static_cast<int>(state.current_state_index + 1);
         }}
     }}
 
-    return TransitionResult::NoMatch;
+    return NO_TRANSITION;
 }}
 """
 
@@ -1662,16 +1728,16 @@ def gen_transition(function_name: str, t: dict):
             body += "\n"
             function_names.append(sub_function_name)
 
-        body += f"""inline TransitionResult {function_name}(FdTable& fds, DetectionState& state, const SyscallEvent& event) {{
-    TransitionResult ret = TransitionResult::NoMatch;
+        body += f"""inline int {function_name}(DetectionState& state, const SyscallEvent& event) {{
+    int ret = NO_TRANSITION;
 """
         for sub_function_name in function_names:
-            body += f"""    ret = {sub_function_name}(fds, state, event);
-    if (ret != TransitionResult::NoMatch) {{
+            body += f"""    ret = {sub_function_name}(state, event);
+    if (ret != NO_TRANSITION) {{
         return ret;
     }}
 """
-        body += "    return TransitionResult::NoMatch;\n"
+        body += "    return NO_TRANSITION;\n"
         body += "}\n"
         return body
 
@@ -1752,7 +1818,7 @@ if __name__ == "__main__":
             exit(1)
 
         if rule.get("type") == "recursive_traversal":
-            function_names = [f"step_{name}_0"]
+            function_names = [f"step_{name}_0", f"step_{name}_1"]
             is_func_body += gen_recursive_traversal(name, function_names, rule)
             is_func_body += "\n"
             window_ns = rule.get("window_ns", 1000000000)

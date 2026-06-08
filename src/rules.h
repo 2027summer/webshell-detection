@@ -15,8 +15,8 @@
 
 namespace detection_rules {
 using namespace engine;
-TransitionResult step_builtin_recursive_traversal_1(FdTable& fds, engine::DetectionState& state, const engine::SyscallEvent& event);
-TransitionResult step_builtin_recursive_traversal_2(FdTable& fds, engine::DetectionState& state, const engine::SyscallEvent& event);
+int step_builtin_recursive_traversal_1(engine::DetectionState& state, const engine::SyscallEvent& event);
+int step_builtin_recursive_traversal_2(engine::DetectionState& state, const engine::SyscallEvent& event);
 }
 
 #if __has_include("codegen_rules.h")
@@ -376,25 +376,25 @@ struct ReadDbLargeState {
     std::string path;
 };
 
-inline TransitionResult step_openat_db(FdTable& fds, DetectionState& state, const SyscallEvent& event) {
+inline int step_openat_db(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_openat) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     if (!event.retval.has_value() || *event.retval < 0) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     const auto* args = std::get_if<OpenAtData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 
     if ((args->flags & O_ACCMODE) == O_WRONLY) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     auto path = get_absolute_path_at(event.pid, args->dirfd, args->pathname);
     if (!path.has_value() || !is_db_file_path(*path)) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     state.data = ReadDbLargeState {
@@ -403,56 +403,56 @@ inline TransitionResult step_openat_db(FdTable& fds, DetectionState& state, cons
         .path = *path,
     };
 
-    return TransitionResult::Advance;
+    return static_cast<int>(state.current_state_index + 1);
 }
 
-inline TransitionResult step_read_db_large(FdTable& fds, DetectionState& state, const SyscallEvent& event) {
+inline int step_read_db_large(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_read && event.syscall_index != SYS_pread64) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     if (!event.retval.has_value() || *event.retval <= 0) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     auto* data = std::any_cast<ReadDbLargeState>(&state.data);
     if (!data) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     const auto* args = std::get_if<ReadData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 
     if (static_cast<long>(args->fd) != data->fd) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     if (!fd_points_to_path(event.pid, args->fd, data->path)) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     data->bytes += *event.retval;
     if (data->bytes < 30000) {
-        return TransitionResult::Stay;
+        return static_cast<int>(state.current_state_index);
     }
-    return TransitionResult::Advance;
+    return static_cast<int>(state.current_state_index + 1);
 }
 
-inline TransitionResult step_execve_grep_recursive(FdTable& fds, DetectionState& state, const SyscallEvent& event) {
+inline int step_execve_grep_recursive(DetectionState& state, const SyscallEvent& event) {
     if (event.syscall_index != SYS_execve) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     const auto* args = std::get_if<ExecveData>(&event.args);
-    if (!args) return TransitionResult::NoMatch;
+    if (!args) return NO_TRANSITION;
 
     if (args->filename != "/usr/bin/grep") {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     size_t argc = args->argv.size();
     if (argc < 2) {
-        return TransitionResult::NoMatch;
+        return NO_TRANSITION;
     }
 
     static const char* deny_options[] = {
@@ -473,12 +473,12 @@ inline TransitionResult step_execve_grep_recursive(FdTable& fds, DetectionState&
 
         for (size_t j = 0; deny_options[j] != nullptr; j++) {
             if (args->argv[i].find(deny_options[j]) != std::string::npos) {
-                return TransitionResult::Advance;
+                return static_cast<int>(state.current_state_index + 1);
             }
         }
     }
 
-    return TransitionResult::NoMatch;
+    return NO_TRANSITION;
 }
 
 

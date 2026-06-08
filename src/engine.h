@@ -8,7 +8,6 @@
 #include <sys/ptrace.h>
 #include "detection_state.h"
 #include "rule.h"
-#include "storage.h"
 #include "syscall_event.h"
 
 namespace engine {
@@ -32,7 +31,6 @@ namespace engine {
             void copy_detection_states(pid_t parent_pid, pid_t child_pid);
             void process_allow_list(const SyscallEvent& event);
             void process_from_shell(SyscallEvent& event);
-            void update_fd_table(const SyscallEvent& event);
             bool has_active_state(pid_t pid, size_t rule_index);
             bool in_cooldown(pid_t pid, size_t rule_index, unsigned long now_ns);
             void set_cooldown(pid_t pid, size_t rule_index, unsigned long now_ns);
@@ -46,8 +44,6 @@ namespace engine {
             std::vector<DetectionState> initial_states;
             std::unordered_map<size_t, DetectionState> active_detection_states;
             std::unordered_map<pid_t, std::unordered_map<size_t, unsigned long>> cooldown_until;
-            
-            std::unordered_map<pid_t, FdTable> fd_tables;
 
             size_t detection_state_count = 0;
             bool detection_started = false;
