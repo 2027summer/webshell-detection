@@ -7,7 +7,6 @@ namespace engine {
     long parse_syscall_rval(__ptrace_syscall_info info);
 
     std::optional<ExecveData> parse_execve(pid_t pid, __ptrace_syscall_info info);
-    std::optional<ExecveAtData> parse_execveat(pid_t pid, __ptrace_syscall_info info);
     std::optional<OpenAtData> parse_openat(pid_t pid, __ptrace_syscall_info info);
     std::optional<ChdirData> parse_chdir(pid_t pid, __ptrace_syscall_info info);
     std::optional<ChmodData> parse_chmod(pid_t pid, __ptrace_syscall_info info);

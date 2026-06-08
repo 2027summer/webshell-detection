@@ -108,26 +108,6 @@ namespace engine {
         };
     }
 
-    std::optional<ExecveAtData> parse_execveat(pid_t pid, __ptrace_syscall_info info) {
-        int dirfd = static_cast<int>(info.entry.args[0]);
-        auto pathname = read_child_string(pid, info.entry.args[1]);
-        auto argv = read_child_string_vector(pid, info.entry.args[2], 16);
-        auto envp = read_child_string_vector(pid, info.entry.args[3], 64);
-        int flags = static_cast<int>(info.entry.args[4]);
-
-        if (!pathname.has_value()) {
-            return std::nullopt;
-        }
-
-        return ExecveAtData {
-            .dirfd = dirfd,
-            .pathname = *pathname,
-            .argv = argv.value_or(std::vector<std::string>{}),
-            .envp = envp.value_or(std::vector<std::string>{}),
-            .flags = flags
-        };
-    }
-
     std::optional<OpenAtData> parse_openat(pid_t pid, __ptrace_syscall_info info) {
         int dirfd = static_cast<int>(info.entry.args[0]);
         auto pathname = read_child_string(pid, info.entry.args[1]);

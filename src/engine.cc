@@ -29,7 +29,6 @@ namespace engine {
     const char* debug_syscall_name(unsigned long syscall_index) {
         switch (syscall_index) {
             case SYS_execve: return "execve";
-            case SYS_execveat: return "execveat";
             case SYS_openat: return "openat";
             case SYS_read: return "read";
             case SYS_pread64: return "pread64";
@@ -140,20 +139,6 @@ namespace engine {
         if (const auto* args = std::get_if<ExecveData>(&event.args)) {
             debug_print_escaped("filename", args->filename);
             auto path = get_execve_path(event.pid, args->filename);
-            if (path.has_value()) {
-                debug_print_escaped("resolved", *path);
-            }
-            debug_print_string_vector("argv", args->argv);
-            fprintf(stderr, "    envp_count=%zu\n", args->envp.size());
-            debug_print_env_value(args->envp, "LD_PRELOAD");
-            debug_print_env_value(args->envp, "LD_LIBRARY_PATH");
-            return;
-        }
-
-        if (const auto* args = std::get_if<ExecveAtData>(&event.args)) {
-            fprintf(stderr, "    dirfd=%d flags=%d\n", args->dirfd, args->flags);
-            debug_print_escaped("pathname", args->pathname);
-            auto path = get_execveat_path(event.pid, args->dirfd, args->pathname);
             if (path.has_value()) {
                 debug_print_escaped("resolved", *path);
             }
@@ -299,14 +284,6 @@ namespace engine {
                 return std::nullopt;
             }
             return get_execve_path(event.pid, args->filename);
-        }
-
-        if (event.syscall_index == SYS_execveat) {
-            const auto* args = std::get_if<ExecveAtData>(&event.args);
-            if (!args) {
-                return std::nullopt;
-            }
-            return get_execveat_path(event.pid, args->dirfd, args->pathname);
         }
 
         return std::nullopt;
@@ -520,7 +497,7 @@ namespace engine {
     }
 
     void Engine::process_allow_list(const SyscallEvent& event) {
-        if (event.syscall_index != SYS_execve && event.syscall_index != SYS_execveat) {
+        if (event.syscall_index != SYS_execve) {
             return;
         }
 
@@ -548,7 +525,7 @@ namespace engine {
     }
 
     void Engine::process_from_shell(SyscallEvent& event) {
-        if (event.syscall_index != SYS_execve && event.syscall_index != SYS_execveat) {
+        if (event.syscall_index != SYS_execve) {
             return;
         }
 
@@ -584,7 +561,7 @@ namespace engine {
         if (it == tracked_pids.end() ||
             !it->second.has_value() ||
             it->second->retval.has_value() ||
-            (it->second->syscall_index != SYS_execve && it->second->syscall_index != SYS_execveat)) {
+            it->second->syscall_index != SYS_execve) {
             if (old_pid == 0 || old_pid == pid) {
                 return;
             }
@@ -593,7 +570,7 @@ namespace engine {
             if (old_it == tracked_pids.end() ||
                 !old_it->second.has_value() ||
                 old_it->second->retval.has_value() ||
-                (old_it->second->syscall_index != SYS_execve && old_it->second->syscall_index != SYS_execveat)) {
+                old_it->second->syscall_index != SYS_execve) {
                 return;
             }
 
@@ -617,7 +594,7 @@ namespace engine {
             return;
         }
 
-        if (event.syscall_index != SYS_execve && event.syscall_index != SYS_execveat) {
+        if (event.syscall_index != SYS_execve) {
             return;
         }
 
@@ -670,13 +647,6 @@ namespace engine {
         switch (info.entry.nr) {
             case SYS_execve: {
                 auto args = parse_execve(pid, info);
-                if (args.has_value()) {
-                    event.args = *args;
-                }
-                break;
-            }
-            case SYS_execveat: {
-                auto args = parse_execveat(pid, info);
                 if (args.has_value()) {
                     event.args = *args;
                 }

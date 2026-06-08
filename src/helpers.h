@@ -147,18 +147,4 @@ namespace engine {
         return std::nullopt;
     }
 
-    inline std::optional<std::string> get_execveat_path(pid_t pid, int dirfd, const std::string& path) {
-        if (path.size() == 0) {
-            if (dirfd < 0) {
-                return std::nullopt;
-            }
-            return get_fd_path(pid, static_cast<unsigned int>(dirfd));
-        }
-
-        auto absolute_path = get_absolute_path_at(pid, dirfd, path);
-        if (!absolute_path.has_value()) {
-            return std::nullopt;
-        }
-        return resolve_exec_fd_path(pid, *absolute_path);
-    }
 }
